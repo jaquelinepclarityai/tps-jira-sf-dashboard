@@ -1,34 +1,53 @@
 import { NextResponse } from "next/server";
-import { google } from "googleapis";
 import type { SalesforceOpportunity } from "@/lib/types";
 
 const SHEET_ID = "1e6CRPOHJuHDaLqiHfTqIlaf8zW_3pVWBgGadeFIN7Xw";
 const TAB_NAME = "SF Opps info";
+const SHEET_GID = "94718738";
 
 // ──────────────────────────────────────────────
-// Google Sheets API (authenticated, reliable)
+// Google Sheets API via API Key (simple, reliable)
 // ──────────────────────────────────────────────
-async function fetchViaAPI(): Promise<string[][] | null> {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+async function fetchViaAPIKey(): Promise<string[][] | null> {
+  const apiKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  if (!apiKey) return null;
 
-  if (!email || !rawKey) {
-    console.log(
-      "[v0] Google service account not configured – email:",
-      !!email,
-      "key:",
-      !!rawKey
-    );
+  // If this looks like a PEM private key rather than an API key, skip
+  if (apiKey.includes("BEGIN PRIVATE KEY") || apiKey.length > 100) return null;
+
+  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(TAB_NAME)}?key=${apiKey}`;
+  console.log("[v0] Fetching via API Key...");
+
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("[v0] API Key fetch error:", res.status, errText.substring(0, 300));
     return null;
   }
 
-  // Vercel stores multi-line env vars with escaped newlines
+  const data = await res.json();
+  console.log("[v0] API Key fetch: got", data.values?.length ?? 0, "rows");
+  if (data.values && data.values.length > 0) {
+    console.log("[v0] API Key headers:", JSON.stringify(data.values[0]));
+  }
+  return (data.values as string[][]) || null;
+}
+
+// ──────────────────────────────────────────────
+// Google Sheets API via Service Account JWT
+// ──────────────────────────────────────────────
+async function fetchViaServiceAccount(): Promise<string[][] | null> {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+
+  if (!email || !rawKey) return null;
+  // Only use this path if the key looks like a PEM private key
+  if (!rawKey.includes("BEGIN PRIVATE KEY") && rawKey.length < 100) return null;
+
+  const { google } = await import("googleapis");
   const privateKey = rawKey.replace(/\\n/g, "\n");
 
   console.log("[v0] Authenticating with service account:", email);
-  console.log("[v0] Private key starts with:", privateKey.substring(0, 30));
-  console.log("[v0] Private key length:", privateKey.length);
-
   const auth = new google.auth.JWT({
     email,
     key: privateKey,
@@ -36,28 +55,18 @@ async function fetchViaAPI(): Promise<string[][] | null> {
   });
 
   const sheets = google.sheets({ version: "v4", auth });
-
-  console.log("[v0] Fetching sheet:", SHEET_ID, "tab:", TAB_NAME);
-
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `'${TAB_NAME}'`,
   });
 
-  console.log("[v0] API response status:", res.status);
-  console.log("[v0] API response rows:", res.data.values?.length ?? 0);
-  if (res.data.values && res.data.values.length > 0) {
-    console.log("[v0] API response headers:", JSON.stringify(res.data.values[0]));
-  }
-
+  console.log("[v0] Service account fetch:", res.data.values?.length ?? 0, "rows");
   return (res.data.values as string[][]) || null;
 }
 
 // ──────────────────────────────────────────────
 // CSV fallback (unauthenticated, can be throttled)
 // ──────────────────────────────────────────────
-const SHEET_GID = "94718738";
-
 function parseCSVRow(row: string): string[] {
   const result: string[] = [];
   let current = "";
@@ -88,7 +97,6 @@ function parseCSV(text: string): Record<string, string>[] {
   if (lines.length < 2) return [];
 
   const headers = parseCSVRow(lines[0]);
-
   return lines.slice(1).map((line) => {
     const values = parseCSVRow(line);
     const row: Record<string, string> = {};
@@ -109,7 +117,7 @@ async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
   for (const csvUrl of urls) {
     try {
       const res = await fetch(csvUrl, {
-        next: { revalidate: 0 },
+        cache: "no-store",
         headers: {
           "User-Agent":
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -118,18 +126,19 @@ async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
       });
       if (res.ok) {
         const text = await res.text();
-        // Google sometimes returns an HTML login/CAPTCHA page instead of CSV
         if (text.trim().startsWith("<!") || text.trim().startsWith("<html")) {
-          console.log("[v0] CSV fallback returned HTML instead of CSV from:", csvUrl);
+          console.log("[v0] CSV fallback returned HTML from:", csvUrl);
           continue;
         }
         const rows = parseCSV(text);
-        if (rows.length > 0) return rows;
-      } else {
-        console.log("[v0] CSV fallback HTTP error:", res.status, "from:", csvUrl);
+        if (rows.length > 0) {
+          console.log("[v0] CSV fallback: got", rows.length, "rows from:", csvUrl);
+          console.log("[v0] CSV headers:", Object.keys(rows[0]).join(" | "));
+          return rows;
+        }
       }
     } catch (err) {
-      console.log("[v0] CSV fallback fetch error:", err);
+      console.log("[v0] CSV fallback error:", err);
     }
   }
   return null;
@@ -155,10 +164,20 @@ function findColumn(
   ...candidates: string[]
 ): string {
   for (const candidate of candidates) {
-    const key = Object.keys(row).find(
+    // Try exact match (case-insensitive)
+    const exactKey = Object.keys(row).find(
       (k) => k.toLowerCase().trim() === candidate.toLowerCase().trim()
     );
-    if (key && row[key]) return row[key];
+    if (exactKey && row[exactKey]) return row[exactKey];
+  }
+  // Try partial/contains match as last resort
+  for (const candidate of candidates) {
+    const partialKey = Object.keys(row).find(
+      (k) =>
+        k.toLowerCase().trim().includes(candidate.toLowerCase().trim()) ||
+        candidate.toLowerCase().trim().includes(k.toLowerCase().trim())
+    );
+    if (partialKey && row[partialKey]) return row[partialKey];
   }
   return "";
 }
@@ -175,7 +194,10 @@ function hasApiOrDatafeed(row: Record<string, string>) {
     row,
     "Access Method (L)",
     "Access_Method_L__c",
-    "Access Method L"
+    "Access Method L",
+    "Access Method",
+    "Access_Method",
+    "AccessMethod"
   ).toLowerCase();
   return (
     accessMethodL.includes("api") ||
@@ -196,18 +218,15 @@ function mapToOpportunity(
       row,
       "Access Method (L)",
       "Access_Method_L__c",
-      "Access Method L"
+      "Access Method L",
+      "Access Method",
+      "Access_Method"
     ),
     amount: parseAmount(
       findColumn(row, "Amount", "Opp Amount", "Total Amount")
     ),
     closeDate: findColumn(row, "Close Date", "CloseDate", "Close"),
-    accountName: findColumn(
-      row,
-      "Account Name",
-      "Account",
-      "AccountName"
-    ),
+    accountName: findColumn(row, "Account Name", "Account", "AccountName"),
     ownerName: findColumn(
       row,
       "Opportunity Owner",
@@ -241,48 +260,49 @@ export async function GET() {
     let source = "";
 
     console.log("[v0] === Starting Google Sheets fetch ===");
-    console.log("[v0] GOOGLE_SERVICE_ACCOUNT_EMAIL set:", !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
-    console.log("[v0] GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY set:", !!process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY);
-    console.log("[v0] GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY length:", process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.length ?? 0);
 
-    // 1. Try authenticated Google Sheets API first (reliable)
+    // 1. Try API Key (simple key like AIza...)
     try {
-      const apiData = await fetchViaAPI();
-      console.log("[v0] fetchViaAPI returned:", apiData ? `${apiData.length} rows` : "null");
-      if (apiData && apiData.length > 1) {
-        rows = rowsToRecords(apiData);
-        source = "api";
-        console.log(`[v0] Google Sheets API: fetched ${rows.length} data rows`);
-        if (rows.length > 0) {
-          console.log("[v0] First row keys:", Object.keys(rows[0]).join(", "));
-          console.log("[v0] First row sample:", JSON.stringify(rows[0]).substring(0, 300));
-        }
+      const apiKeyData = await fetchViaAPIKey();
+      if (apiKeyData && apiKeyData.length > 1) {
+        rows = rowsToRecords(apiKeyData);
+        source = "api-key";
+        console.log("[v0] API Key method: got", rows.length, "data rows");
       }
-    } catch (apiErr) {
-      console.error("[v0] Google Sheets API error:", apiErr);
+    } catch (err) {
+      console.error("[v0] API Key method error:", err);
     }
 
-    // 2. Fall back to public CSV export
+    // 2. Try Service Account JWT
+    if (!rows || rows.length === 0) {
+      try {
+        const saData = await fetchViaServiceAccount();
+        if (saData && saData.length > 1) {
+          rows = rowsToRecords(saData);
+          source = "service-account";
+          console.log("[v0] Service account method: got", rows.length, "data rows");
+        }
+      } catch (err) {
+        console.error("[v0] Service account method error:", err);
+      }
+    }
+
+    // 3. Fall back to CSV
     if (!rows || rows.length === 0) {
       console.log("[v0] Falling back to CSV export...");
       rows = await fetchViaCSV();
       source = "csv";
       if (rows) {
-        console.log(`[v0] CSV fallback: fetched ${rows.length} rows`);
+        console.log("[v0] CSV fallback: got", rows.length, "rows");
       }
     }
 
-    // 3. Neither method worked
+    // 4. Nothing worked
     if (!rows || rows.length === 0) {
-      const hasServiceAccount =
-        !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL &&
-        !!process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-
       return NextResponse.json(
         {
-          error: hasServiceAccount
-            ? "Google Sheets API returned no data. Make sure the service account has access to the sheet."
-            : 'No data available. Add GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY environment variables for reliable access, or ensure the sheet is shared as "Anyone with the link can view".',
+          error:
+            "No data available from Google Sheets. Check that the API key or service account has access.",
           dueDiligence: [],
           standingApart: [],
           totalDueDiligence: 0,
@@ -294,18 +314,30 @@ export async function GET() {
       );
     }
 
-    // Debug: log all unique stages and access methods found
+    // Debug: log ALL column headers and unique stages/access methods
+    if (rows.length > 0) {
+      console.log("[v0] All column headers:", JSON.stringify(Object.keys(rows[0])));
+      console.log("[v0] First data row:", JSON.stringify(rows[0]).substring(0, 500));
+    }
+
     const uniqueStages = new Set<string>();
     const uniqueAccessMethods = new Set<string>();
     rows.forEach((row) => {
       const stage = findColumn(row, "Stage", "StageName", "Stage Name");
-      const access = findColumn(row, "Access Method (L)", "Access_Method_L__c", "Access Method L");
+      const access = findColumn(
+        row,
+        "Access Method (L)",
+        "Access_Method_L__c",
+        "Access Method L",
+        "Access Method",
+        "Access_Method"
+      );
       if (stage) uniqueStages.add(stage);
       if (access) uniqueAccessMethods.add(access);
     });
-    console.log("[v0] Total rows from sheet:", rows.length);
-    console.log("[v0] Unique stages found:", JSON.stringify([...uniqueStages]));
-    console.log("[v0] Unique access methods found:", JSON.stringify([...uniqueAccessMethods]));
+    console.log("[v0] Total rows:", rows.length);
+    console.log("[v0] Unique stages:", JSON.stringify([...uniqueStages]));
+    console.log("[v0] Unique access methods:", JSON.stringify([...uniqueAccessMethods]));
 
     const dueDiligence = rows.filter((row) => {
       const stage = findColumn(
@@ -330,6 +362,30 @@ export async function GET() {
     console.log("[v0] Due Diligence matches:", dueDiligence.length);
     console.log("[v0] Standing Apart matches:", standingApart.length);
 
+    // If both are 0 but we have rows, also show unfiltered count for debug
+    if (dueDiligence.length === 0 && standingApart.length === 0 && rows.length > 0) {
+      console.log("[v0] WARNING: Filters matched 0 rows out of", rows.length, "total rows.");
+      console.log("[v0] This likely means column names or stage/access values don't match expectations.");
+      
+      // Return ALL rows as debug data so user can see what's there
+      const allOpportunities = rows.map(mapToOpportunity);
+      return NextResponse.json({
+        dueDiligence: allOpportunities,
+        standingApart: [],
+        totalDueDiligence: allOpportunities.length,
+        totalStandingApart: 0,
+        configured: true,
+        source,
+        debug: {
+          note: "Filters matched 0 rows. Showing all rows unfiltered for debugging.",
+          totalRawRows: rows.length,
+          columnHeaders: rows.length > 0 ? Object.keys(rows[0]) : [],
+          uniqueStages: [...uniqueStages],
+          uniqueAccessMethods: [...uniqueAccessMethods],
+        },
+      });
+    }
+
     return NextResponse.json({
       dueDiligence: dueDiligence.map(mapToOpportunity),
       standingApart: standingApart.map(mapToOpportunity),
@@ -339,7 +395,7 @@ export async function GET() {
       source,
     });
   } catch (error) {
-    console.error("[v0] Salesforce/GSheets fetch error:", error);
+    console.error("[v0] Google Sheets fetch error:", error);
     return NextResponse.json(
       {
         error: `Failed to fetch data: ${String(error)}`,
