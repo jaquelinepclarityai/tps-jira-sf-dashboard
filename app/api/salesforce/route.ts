@@ -220,10 +220,11 @@ function mapToOpportunity(
       "Access_Method_L__c",
       "Access Method L",
       "Access Method",
-      "Access_Method"
+      "Access_Method",
+      "Product modules"
     ),
     amount: parseAmount(
-      findColumn(row, "Amount", "Opp Amount", "Total Amount")
+      findColumn(row, "Opp ARR (Master) (converted)", "Amount", "Opp Amount", "Total Amount")
     ),
     closeDate: findColumn(row, "Close Date", "CloseDate", "Close"),
     accountName: findColumn(row, "Account Name", "Account", "AccountName"),
@@ -237,7 +238,7 @@ function mapToOpportunity(
     probability: parseAmount(
       findColumn(row, "Probability", "Probability (%)", "Win %")
     ),
-    createdDate: findColumn(row, "Created Date", "CreatedDate", "Created"),
+    createdDate: findColumn(row, "Contract Start Date", "Created Date", "CreatedDate", "Created"),
     lastModifiedDate: findColumn(
       row,
       "Last Modified Date",
@@ -339,6 +340,22 @@ export async function GET() {
     console.log("[v0] Unique stages:", JSON.stringify([...uniqueStages]));
     console.log("[v0] Unique access methods:", JSON.stringify([...uniqueAccessMethods]));
 
+    // Filter by stage only. The Access Method column does not exist in this sheet,
+    // so we only filter by stage name.
+    const hasAccessMethodColumn = rows.some((row) => {
+      const access = findColumn(
+        row,
+        "Access Method (L)",
+        "Access_Method_L__c",
+        "Access Method L",
+        "Access Method",
+        "Access_Method"
+      );
+      return access !== "";
+    });
+
+    console.log("[v0] Has Access Method column:", hasAccessMethodColumn);
+
     const dueDiligence = rows.filter((row) => {
       const stage = findColumn(
         row,
@@ -346,7 +363,9 @@ export async function GET() {
         "StageName",
         "Stage Name"
       ).toLowerCase();
-      return stage.includes("due diligence") && hasApiOrDatafeed(row);
+      const stageMatch = stage.includes("due diligence");
+      if (!hasAccessMethodColumn) return stageMatch;
+      return stageMatch && hasApiOrDatafeed(row);
     });
 
     const standingApart = rows.filter((row) => {
@@ -356,7 +375,9 @@ export async function GET() {
         "StageName",
         "Stage Name"
       ).toLowerCase();
-      return stage.includes("standing apart") && hasApiOrDatafeed(row);
+      const stageMatch = stage.includes("standing apart");
+      if (!hasAccessMethodColumn) return stageMatch;
+      return stageMatch && hasApiOrDatafeed(row);
     });
 
     console.log("[v0] Due Diligence matches:", dueDiligence.length);
