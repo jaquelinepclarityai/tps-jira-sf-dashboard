@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { google } from "googleapis";
 
 const SHEET_ID = "1e6CRPOHJuHDaLqiHfTqIlaf8zW_3pVWBgGadeFIN7Xw";
 const TAB_NAME = "SF Opps info";
@@ -7,65 +6,71 @@ const TAB_NAME = "SF Opps info";
 export async function GET() {
   const diagnostics: Record<string, unknown> = {};
 
-  // 1. Check env vars
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  const apiKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  diagnostics.apiKeySet = !!apiKey;
+  diagnostics.apiKeyLength = apiKey?.length ?? 0;
 
-  diagnostics.emailSet = !!email;
-  diagnostics.emailValue = email ? email.substring(0, 20) + "..." : "NOT SET";
-  diagnostics.keySet = !!rawKey;
-  diagnostics.keyLength = rawKey?.length ?? 0;
-  diagnostics.keyStartsWith = rawKey ? rawKey.substring(0, 30) : "NOT SET";
-
-  if (!email || !rawKey) {
+  if (!apiKey) {
     return NextResponse.json({
       ...diagnostics,
-      error: "Missing GOOGLE_SERVICE_ACCOUNT_EMAIL or GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY",
+      error: "Missing GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY",
     });
   }
 
-  // 2. Try authenticating
-  const privateKey = rawKey.replace(/\\n/g, "\n");
-  diagnostics.processedKeyStartsWith = privateKey.substring(0, 40);
-  diagnostics.processedKeyLength = privateKey.length;
-  diagnostics.keyContainsBeginMarker = privateKey.includes("-----BEGIN");
-
   try {
-    const auth = new google.auth.JWT({
-      email,
-      key: privateKey,
-      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-    });
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(TAB_NAME)}?key=${apiKey}`;
+    const res = await fetch(url, { cache: "no-store" });
 
-    diagnostics.authCreated = true;
+    if (!res.ok) {
+      const errText = await res.text();
+      diagnostics.fetchStatus = res.status;
+      diagnostics.fetchError = errText.substring(0, 500);
+      return NextResponse.json(diagnostics);
+    }
 
-    // 3. Try fetching data
-    const sheets = google.sheets({ version: "v4", auth });
+    const data = await res.json();
+    const values = data.values as string[][] | undefined;
+    diagnostics.totalRows = values?.length ?? 0;
+    diagnostics.headers = values?.[0] ?? [];
 
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: SHEET_ID,
-      range: `'${TAB_NAME}'`,
-    });
+    if (values && values.length > 1) {
+      const headers = values[0];
+      const rows = values.slice(1).map((row: string[]) => {
+        const obj: Record<string, string> = {};
+        headers.forEach((h: string, i: number) => (obj[h] = row[i] || ""));
+        return obj;
+      });
 
-    diagnostics.apiStatus = res.status;
-    diagnostics.totalRows = res.data.values?.length ?? 0;
+      // Find stage and access method columns
+      const stageCol = headers.find(
+        (h: string) => h.toLowerCase().includes("stage")
+      );
+      const accessCol = headers.find(
+        (h: string) =>
+          h.toLowerCase().includes("access") &&
+          h.toLowerCase().includes("method")
+      );
 
-    if (res.data.values && res.data.values.length > 0) {
-      diagnostics.headers = res.data.values[0];
-      diagnostics.sampleRow = res.data.values.length > 1 ? res.data.values[1] : "no data rows";
-    } else {
-      diagnostics.dataNote = "API returned no values";
+      diagnostics.stageColumnName = stageCol ?? "NOT FOUND";
+      diagnostics.accessMethodColumnName = accessCol ?? "NOT FOUND";
+
+      const uniqueStages = new Set<string>();
+      const uniqueAccessMethods = new Set<string>();
+
+      rows.forEach((row) => {
+        if (stageCol && row[stageCol]) uniqueStages.add(row[stageCol]);
+        if (accessCol && row[accessCol]) uniqueAccessMethods.add(row[accessCol]);
+      });
+
+      diagnostics.uniqueStages = [...uniqueStages];
+      diagnostics.uniqueAccessMethods = [...uniqueAccessMethods];
+      diagnostics.sampleRows = rows.slice(0, 3);
     }
 
     diagnostics.success = true;
-  } catch (err: unknown) {
+  } catch (err) {
     diagnostics.success = false;
     diagnostics.error = String(err);
-    if (err && typeof err === "object" && "response" in err) {
-      const gErr = err as { response?: { status?: number; data?: unknown } };
-      diagnostics.errorStatus = gErr.response?.status;
-      diagnostics.errorData = gErr.response?.data;
-    }
   }
 
   return NextResponse.json(diagnostics);
