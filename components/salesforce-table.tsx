@@ -59,14 +59,7 @@ export function SalesforceTable({
     return (
       <div className="rounded-lg border border-border bg-card p-8 text-center">
         <p className="text-muted-foreground">
-          Could not access the Google Sheet. For reliable access, add these environment variables:
-        </p>
-        <div className="mt-4 flex flex-col items-center gap-1 font-mono text-xs text-muted-foreground">
-          <span>GOOGLE_SERVICE_ACCOUNT_EMAIL</span>
-          <span>GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY</span>
-        </div>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Then share the Google Sheet with the service account email.
+          Could not access the Google Sheet. Please check the sheet is shared and accessible.
         </p>
       </div>
     );
