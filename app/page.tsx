@@ -95,12 +95,20 @@ export default function Dashboard() {
               {debugInfo ? JSON.stringify(debugInfo, null, 2) : "Loading diagnostics..."}
             </pre>
             <div className="mt-3 rounded bg-background p-3 text-xs font-mono text-foreground">
-              <p className="font-semibold">SF API Response:</p>
+              <p className="font-semibold">SF API Response Summary:</p>
               <pre className="mt-1 max-h-40 overflow-auto">
                 {sfData ? JSON.stringify({ error: sfData.error, configured: sfData.configured, source: (sfData as Record<string, unknown>).source, ddCount: sfData.dueDiligence?.length, saCount: sfData.standingApart?.length }, null, 2) : sfLoading ? "Loading..." : "No data"}
               </pre>
               {sfError && <p className="mt-1 text-red-500">SWR Error: {String(sfError)}</p>}
             </div>
+            {(sfData as Record<string, unknown>)?.debug && (
+              <div className="mt-3 rounded border border-red-400/40 bg-red-500/5 p-3 text-xs font-mono text-foreground">
+                <p className="font-semibold text-red-500">FILTER DEBUG (filters matched 0 rows - showing actual sheet values):</p>
+                <pre className="mt-2 max-h-60 overflow-auto whitespace-pre-wrap">
+                  {JSON.stringify((sfData as Record<string, unknown>).debug, null, 2)}
+                </pre>
+              </div>
+            )}
           </details>
           <DashboardHeader
             onRefresh={handleRefresh}
