@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import useSWR from "swr";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DashboardHeader } from "@/components/dashboard-header";
@@ -69,10 +69,39 @@ export default function Dashboard() {
   const jiraConfigured = jiraData?.configured ?? true;
   const sfConfigured = sfData?.configured ?? true;
 
+  // Debug: log raw API responses
+  console.log("[v0] sfData raw response:", JSON.stringify(sfData, null, 2)?.substring(0, 1000));
+  console.log("[v0] sfError:", sfError);
+  console.log("[v0] sfLoading:", sfLoading);
+
+  const [debugInfo, setDebugInfo] = useState<Record<string, unknown> | null>(null);
+  useEffect(() => {
+    fetch("/api/debug-sheets")
+      .then((r) => r.json())
+      .then((d) => setDebugInfo(d))
+      .catch((e) => setDebugInfo({ fetchError: String(e) }));
+  }, []);
+
   return (
     <main className="min-h-screen bg-background">
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
         <div className="flex flex-col gap-6">
+          {/* Temporary debug panel */}
+          <details className="rounded-lg border border-yellow-500/40 bg-yellow-500/5 p-4">
+            <summary className="cursor-pointer text-sm font-medium text-yellow-600">
+              Debug: Google Sheets Connection Diagnostics
+            </summary>
+            <pre className="mt-3 max-h-96 overflow-auto rounded bg-background p-3 text-xs font-mono text-foreground">
+              {debugInfo ? JSON.stringify(debugInfo, null, 2) : "Loading diagnostics..."}
+            </pre>
+            <div className="mt-3 rounded bg-background p-3 text-xs font-mono text-foreground">
+              <p className="font-semibold">SF API Response:</p>
+              <pre className="mt-1 max-h-40 overflow-auto">
+                {sfData ? JSON.stringify({ error: sfData.error, configured: sfData.configured, source: (sfData as Record<string, unknown>).source, ddCount: sfData.dueDiligence?.length, saCount: sfData.standingApart?.length }, null, 2) : sfLoading ? "Loading..." : "No data"}
+              </pre>
+              {sfError && <p className="mt-1 text-red-500">SWR Error: {String(sfError)}</p>}
+            </div>
+          </details>
           <DashboardHeader
             onRefresh={handleRefresh}
             isRefreshing={isRefreshing || jiraLoading || sfLoading}

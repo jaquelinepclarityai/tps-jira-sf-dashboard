@@ -8,7 +8,7 @@ const inter = Inter({ subsets: ['latin'], variable: '--font-inter' })
 const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-jetbrains-mono' })
 
 export const metadata: Metadata = {
-  title: 'Ops Dashboard - Jira & Salesforce Monitor',
+  title: 'TPS Dashboard- Jira & Salesforce Monitor',
   description: 'Real-time monitoring dashboard for Jira tickets and Salesforce opportunities',
 }
 
