@@ -41,6 +41,7 @@ export async function GET() {
           "created",
           "updated",
           "duedate",
+          "customfield_10448",
           "issuetype",
         ],
       }),
@@ -76,6 +77,7 @@ export async function GET() {
           created: string;
           updated: string;
           duedate: string | null;
+          customfield_10448: string | null;
           issuetype: { name: string };
         };
       }) => ({
@@ -92,7 +94,7 @@ export async function GET() {
           null,
         created: issue.fields.created,
         updated: issue.fields.updated,
-        dueDate: issue.fields.duedate || null,
+        dueDate: issue.fields.customfield_10448 || issue.fields.duedate || null,
         type: issue.fields.issuetype?.name || "Task",
         url: `${baseUrl}/browse/${issue.key}`,
       })

@@ -38,8 +38,12 @@ export default function Dashboard() {
     isLoading: jiraLoading,
     mutate: mutateJira,
   } = useSWR<JiraResponse>("/api/jira", fetcher, {
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
     refreshInterval: 5 * 60 * 1000,
+    dedupingInterval: 60 * 1000,
+    errorRetryCount: 3,
+    errorRetryInterval: 5000,
     onSuccess: () => setLastUpdated(new Date()),
   });
 
@@ -49,8 +53,12 @@ export default function Dashboard() {
     isLoading: sfLoading,
     mutate: mutateSf,
   } = useSWR<SalesforceResponse>("/api/salesforce", fetcher, {
-    revalidateOnFocus: false,
+    revalidateOnFocus: true,
+    revalidateOnReconnect: true,
     refreshInterval: 5 * 60 * 1000,
+    dedupingInterval: 60 * 1000,
+    errorRetryCount: 3,
+    errorRetryInterval: 5000,
     onSuccess: () => setLastUpdated(new Date()),
   });
 
