@@ -175,19 +175,19 @@ function parseAmount(value: string): number | null {
 }
 
 function hasApiOrDatafeed(row: Record<string, string>) {
-  const accessMethodL = findColumn(
+  const accessMethod = findColumn(
     row,
-    "Access Method (L)",
-    "Access_Method_L__c",
-    "Access Method L",
+    "Access Method (Opp)",
+    "Access_Method_Opp__c",
     "Access Method",
     "Access_Method",
-    "AccessMethod"
+    "Access Method (L)",
+    "Access_Method_L__c"
   ).toLowerCase();
   return (
-    accessMethodL.includes("api") ||
-    accessMethodL.includes("data feed") ||
-    accessMethodL.includes("datafeed")
+    accessMethod.includes("api") ||
+    accessMethod.includes("data feed") ||
+    accessMethod.includes("datafeed")
   );
 }
 
@@ -201,12 +201,12 @@ function mapToOpportunity(
     stageName: findColumn(row, "Stage", "StageName", "Stage Name"),
     accessMethod: findColumn(
       row,
-      "Access Method (L)",
-      "Access_Method_L__c",
-      "Access Method L",
+      "Access Method (Opp)",
+      "Access_Method_Opp__c",
       "Access Method",
       "Access_Method",
-      "Product modules"
+      "Access Method (L)",
+      "Access_Method_L__c"
     ),
     amount: parseAmount(
       findColumn(row, "Opp ARR (Master) (converted)", "Amount", "Opp Amount", "Total Amount")
