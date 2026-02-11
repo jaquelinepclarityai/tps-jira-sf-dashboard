@@ -25,6 +25,10 @@ async function fetchViaAPI(): Promise<string[][] | null> {
   // Vercel stores multi-line env vars with escaped newlines
   const privateKey = rawKey.replace(/\\n/g, "\n");
 
+  console.log("[v0] Authenticating with service account:", email);
+  console.log("[v0] Private key starts with:", privateKey.substring(0, 30));
+  console.log("[v0] Private key length:", privateKey.length);
+
   const auth = new google.auth.JWT({
     email,
     key: privateKey,
@@ -33,10 +37,18 @@ async function fetchViaAPI(): Promise<string[][] | null> {
 
   const sheets = google.sheets({ version: "v4", auth });
 
+  console.log("[v0] Fetching sheet:", SHEET_ID, "tab:", TAB_NAME);
+
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
     range: `'${TAB_NAME}'`,
   });
+
+  console.log("[v0] API response status:", res.status);
+  console.log("[v0] API response rows:", res.data.values?.length ?? 0);
+  if (res.data.values && res.data.values.length > 0) {
+    console.log("[v0] API response headers:", JSON.stringify(res.data.values[0]));
+  }
 
   return (res.data.values as string[][]) || null;
 }
@@ -228,13 +240,23 @@ export async function GET() {
     let rows: Record<string, string>[] | null = null;
     let source = "";
 
+    console.log("[v0] === Starting Google Sheets fetch ===");
+    console.log("[v0] GOOGLE_SERVICE_ACCOUNT_EMAIL set:", !!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
+    console.log("[v0] GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY set:", !!process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY);
+    console.log("[v0] GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY length:", process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.length ?? 0);
+
     // 1. Try authenticated Google Sheets API first (reliable)
     try {
       const apiData = await fetchViaAPI();
+      console.log("[v0] fetchViaAPI returned:", apiData ? `${apiData.length} rows` : "null");
       if (apiData && apiData.length > 1) {
         rows = rowsToRecords(apiData);
         source = "api";
-        console.log(`[v0] Google Sheets API: fetched ${rows.length} rows`);
+        console.log(`[v0] Google Sheets API: fetched ${rows.length} data rows`);
+        if (rows.length > 0) {
+          console.log("[v0] First row keys:", Object.keys(rows[0]).join(", "));
+          console.log("[v0] First row sample:", JSON.stringify(rows[0]).substring(0, 300));
+        }
       }
     } catch (apiErr) {
       console.error("[v0] Google Sheets API error:", apiErr);
@@ -272,6 +294,19 @@ export async function GET() {
       );
     }
 
+    // Debug: log all unique stages and access methods found
+    const uniqueStages = new Set<string>();
+    const uniqueAccessMethods = new Set<string>();
+    rows.forEach((row) => {
+      const stage = findColumn(row, "Stage", "StageName", "Stage Name");
+      const access = findColumn(row, "Access Method (L)", "Access_Method_L__c", "Access Method L");
+      if (stage) uniqueStages.add(stage);
+      if (access) uniqueAccessMethods.add(access);
+    });
+    console.log("[v0] Total rows from sheet:", rows.length);
+    console.log("[v0] Unique stages found:", JSON.stringify([...uniqueStages]));
+    console.log("[v0] Unique access methods found:", JSON.stringify([...uniqueAccessMethods]));
+
     const dueDiligence = rows.filter((row) => {
       const stage = findColumn(
         row,
@@ -291,6 +326,9 @@ export async function GET() {
       ).toLowerCase();
       return stage.includes("standing apart") && hasApiOrDatafeed(row);
     });
+
+    console.log("[v0] Due Diligence matches:", dueDiligence.length);
+    console.log("[v0] Standing Apart matches:", standingApart.length);
 
     return NextResponse.json({
       dueDiligence: dueDiligence.map(mapToOpportunity),
