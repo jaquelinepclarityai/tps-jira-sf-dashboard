@@ -14,10 +14,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { SalesforceOpportunity } from "@/lib/types";
 
 function getAccessMethodColor(method: string) {
-  const lower = method.toLowerCase();
-  if (lower === "api")
+  const lower = (method || "").toLowerCase();
+  if (lower.includes("api"))
     return "bg-primary/15 text-primary border-primary/20";
-  if (lower.includes("data feed"))
+  // FIXED: Now checks for both "data feed" and "datafeed" to match backend logic
+  if (lower.includes("data feed") || lower.includes("datafeed"))
     return "bg-success/15 text-success border-success/20";
   return "bg-muted text-muted-foreground border-border";
 }
@@ -30,16 +31,6 @@ function formatCurrency(amount: number | null) {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);
-}
-
-function formatDate(dateStr: string) {
-  if (!dateStr) return "--";
-  const date = new Date(dateStr);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 interface SalesforceTableProps {
@@ -87,8 +78,7 @@ export function SalesforceTable({
     return (
       <div className="rounded-lg border border-border bg-card p-8 text-center">
         <p className="text-muted-foreground">
-          No opportunities found matching the criteria (Access Method: Data Feed
-          or API, Stage: Due Diligence).
+          No opportunities found matching the criteria.
         </p>
       </div>
     );
@@ -99,54 +89,53 @@ export function SalesforceTable({
       <Table>
         <TableHeader>
           <TableRow className="border-border hover:bg-transparent">
-            <TableHead className="text-muted-foreground">
-              Opportunity
-            </TableHead>
-            <TableHead className="text-muted-foreground">Account</TableHead>
-            <TableHead className="text-muted-foreground">
-              Access Method
-            </TableHead>
+            {/* CHANGED: Label to 'Opportunity' since that is what is linked */}
+            <TableHead className="text-muted-foreground">Opportunity</TableHead>
+            <TableHead className="text-muted-foreground">Access Method</TableHead>
             <TableHead className="text-muted-foreground">Stage</TableHead>
-            <TableHead className="text-muted-foreground text-right">
-              Amount
-            </TableHead>
-            <TableHead className="text-muted-foreground text-right">
-              Probability
-            </TableHead>
+            <TableHead className="text-muted-foreground text-right">Opp ARR</TableHead>
             <TableHead className="text-muted-foreground">Owner</TableHead>
-            <TableHead className="text-muted-foreground">Close Date</TableHead>
-            <TableHead className="text-muted-foreground sr-only">
-              Link
-            </TableHead>
+            <TableHead className="text-muted-foreground sr-only">Link</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {opportunities.map((opp) => (
             <TableRow key={opp.id} className="border-border">
-              <TableCell className="max-w-[250px]">
-                <span
-                  className="truncate block text-foreground font-medium"
-                  title={opp.name}
-                >
-                  {opp.name}
-                </span>
-              </TableCell>
               <TableCell>
-                <span className="text-sm text-muted-foreground">
-                  {opp.accountName}
-                </span>
+                {opp.url ? (
+                  <a
+                    href={opp.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-medium text-foreground hover:text-primary transition-colors inline-flex items-center gap-1.5"
+                    // CHANGED: Tooltip now shows Account Name for context
+                    title={`Account: ${opp.accountName}`}
+                  >
+                    {/* CHANGED: Display Opportunity Name instead of Account Name */}
+                    {opp.name || opp.accountName || "Untitled Opportunity"}
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-50" />
+                  </a>
+                ) : (
+                  <span className="text-sm font-medium text-foreground">
+                    {opp.name || opp.accountName || "--"}
+                  </span>
+                )}
+                {/* Optional: Show Account Name smaller below if desired */}
+                {opp.accountName && opp.name && (
+                  <div className="text-xs text-muted-foreground mt-0.5">{opp.accountName}</div>
+                )}
               </TableCell>
               <TableCell>
                 <Badge
                   variant="outline"
                   className={getAccessMethodColor(opp.accessMethod)}
                 >
-                  {opp.accessMethod}
+                  {opp.accessMethod || "--"}
                 </Badge>
               </TableCell>
               <TableCell>
-                <span className="text-xs text-muted-foreground">
-                  {opp.stageName}
+                <span className="text-sm text-muted-foreground">
+                  {opp.stageName || "--"}
                 </span>
               </TableCell>
               <TableCell className="text-right">
@@ -154,31 +143,23 @@ export function SalesforceTable({
                   {formatCurrency(opp.amount)}
                 </span>
               </TableCell>
-              <TableCell className="text-right">
-                <span className="font-mono text-sm text-muted-foreground">
-                  {opp.probability !== null ? `${opp.probability}%` : "--"}
-                </span>
-              </TableCell>
               <TableCell>
                 <span className="text-sm text-muted-foreground">
-                  {opp.ownerName}
+                  {opp.ownerName || "--"}
                 </span>
               </TableCell>
               <TableCell>
-                <span className="text-xs text-muted-foreground font-mono">
-                  {formatDate(opp.closeDate)}
-                </span>
-              </TableCell>
-              <TableCell>
-                <a
-                  href={opp.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-muted-foreground hover:text-primary transition-colors"
-                  aria-label={`Open ${opp.name} in Salesforce`}
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </a>
+                {opp.url && (
+                  <a
+                    href={opp.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-muted-foreground hover:text-primary transition-colors sr-only"
+                    aria-label={`Open ${opp.name} in Salesforce`}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
               </TableCell>
             </TableRow>
           ))}
