@@ -291,6 +291,12 @@ export async function GET() {
       );
     }
 
+    // Log actual column headers so we can map them correctly
+    if (rows.length > 0) {
+      console.log("[v0] Sheet column headers:", JSON.stringify(Object.keys(rows[0])));
+      console.log("[v0] First row data:", JSON.stringify(rows[0]));
+    }
+
     // Check if Access Method column exists in this sheet
     const hasAccessMethodColumn = rows.some((row) => {
       const access = findColumn(
