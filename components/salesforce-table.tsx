@@ -14,10 +14,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { SalesforceOpportunity } from "@/lib/types";
 
 function getAccessMethodColor(method: string) {
-  const lower = method.toLowerCase();
-  if (lower === "api")
+  const lower = (method || "").toLowerCase();
+  if (lower.includes("api"))
     return "bg-primary/15 text-primary border-primary/20";
-  if (lower.includes("data feed"))
+  // FIXED: Now checks for both "data feed" and "datafeed" to match backend logic
+  if (lower.includes("data feed") || lower.includes("datafeed"))
     return "bg-success/15 text-success border-success/20";
   return "bg-muted text-muted-foreground border-border";
 }
@@ -77,8 +78,7 @@ export function SalesforceTable({
     return (
       <div className="rounded-lg border border-border bg-card p-8 text-center">
         <p className="text-muted-foreground">
-          No opportunities found matching the criteria (Access Method: Data Feed
-          or API, Stage: Due Diligence).
+          No opportunities found matching the criteria.
         </p>
       </div>
     );
@@ -89,7 +89,8 @@ export function SalesforceTable({
       <Table>
         <TableHeader>
           <TableRow className="border-border hover:bg-transparent">
-            <TableHead className="text-muted-foreground">Account Name</TableHead>
+            {/* CHANGED: Label to 'Opportunity' since that is what is linked */}
+            <TableHead className="text-muted-foreground">Opportunity</TableHead>
             <TableHead className="text-muted-foreground">Access Method</TableHead>
             <TableHead className="text-muted-foreground">Stage</TableHead>
             <TableHead className="text-muted-foreground text-right">Opp ARR</TableHead>
@@ -107,15 +108,21 @@ export function SalesforceTable({
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm font-medium text-foreground hover:text-primary transition-colors inline-flex items-center gap-1.5"
-                    title={opp.name}
+                    // CHANGED: Tooltip now shows Account Name for context
+                    title={`Account: ${opp.accountName}`}
                   >
-                    {opp.accountName || "--"}
-                    <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                    {/* CHANGED: Display Opportunity Name instead of Account Name */}
+                    {opp.name || opp.accountName || "Untitled Opportunity"}
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0 opacity-50" />
                   </a>
                 ) : (
                   <span className="text-sm font-medium text-foreground">
-                    {opp.accountName || "--"}
+                    {opp.name || opp.accountName || "--"}
                   </span>
+                )}
+                {/* Optional: Show Account Name smaller below if desired */}
+                {opp.accountName && opp.name && (
+                  <div className="text-xs text-muted-foreground mt-0.5">{opp.accountName}</div>
                 )}
               </TableCell>
               <TableCell>
