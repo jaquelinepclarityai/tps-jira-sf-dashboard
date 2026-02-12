@@ -169,7 +169,17 @@ function findColumn(
 
 function parseAmount(value: string): number | null {
   if (!value) return null;
-  const cleaned = value.replace(/[^0-9.-]/g, "");
+  // Handle European format: "1.234.567,89" -> "1234567.89"
+  // Handle US format: "1,234,567.89" -> "1234567.89"
+  let cleaned = value.replace(/[^0-9.,-]/g, "");
+  // If last separator is a comma followed by 1-2 digits (European decimal), convert
+  const europeanMatch = cleaned.match(/^([0-9.]*),(\d{1,2})$/);
+  if (europeanMatch) {
+    cleaned = europeanMatch[1].replace(/\./g, "") + "." + europeanMatch[2];
+  } else {
+    // US format or no decimals: remove commas
+    cleaned = cleaned.replace(/,/g, "");
+  }
   const num = parseFloat(cleaned);
   return isNaN(num) ? null : num;
 }
@@ -195,8 +205,9 @@ function mapToOpportunity(
   row: Record<string, string>,
   idx: number
 ): SalesforceOpportunity {
+  const oppId = findColumn(row, "Opportunity ID", "Id", "ID");
   return {
-    id: findColumn(row, "Opportunity ID", "Id", "ID") || `row-${idx}`,
+    id: oppId || `row-${idx}`,
     name: findColumn(row, "Opportunity Name", "Name", "Opportunity"),
     stageName: findColumn(row, "Stage", "StageName", "Stage Name"),
     accessMethod: findColumn(
@@ -204,12 +215,10 @@ function mapToOpportunity(
       "Access Method (Opp)",
       "Access_Method_Opp__c",
       "Access Method",
-      "Access_Method",
-      "Access Method (L)",
-      "Access_Method_L__c"
+      "Access_Method"
     ),
     amount: parseAmount(
-      findColumn(row, "Opp ARR (Master) (converted)", "Amount", "Opp Amount", "Total Amount")
+      findColumn(row, "Opp ARR (Master) (converted)", "Amount", "Opp Amount")
     ),
     closeDate: findColumn(row, "Close Date", "CloseDate", "Close"),
     accountName: findColumn(row, "Account Name", "Account", "AccountName"),
@@ -220,19 +229,11 @@ function mapToOpportunity(
       "Owner Name",
       "OwnerName"
     ),
-    probability: parseAmount(
-      findColumn(row, "Probability", "Probability (%)", "Win %")
-    ),
-    createdDate: findColumn(row, "Contract Start Date", "Created Date", "CreatedDate", "Created"),
-    lastModifiedDate: findColumn(
-      row,
-      "Last Modified Date",
-      "LastModifiedDate",
-      "Last Modified",
-      "Modified Date"
-    ),
-    url: findColumn(row, "Opportunity ID", "Id", "ID")
-      ? `https://clarityai.lightning.force.com/${findColumn(row, "Opportunity ID", "Id", "ID")}`
+    probability: null,
+    createdDate: "",
+    lastModifiedDate: "",
+    url: oppId
+      ? `https://clarityai.lightning.force.com/lightning/r/Opportunity/${oppId}/view`
       : "",
   };
 }
@@ -289,12 +290,6 @@ export async function GET() {
         },
         { status: 200 }
       );
-    }
-
-    // Log actual column headers so we can map them correctly
-    if (rows.length > 0) {
-      console.log("[v0] Sheet column headers:", JSON.stringify(Object.keys(rows[0])));
-      console.log("[v0] First row data:", JSON.stringify(rows[0]));
     }
 
     // Check if Access Method column exists in this sheet

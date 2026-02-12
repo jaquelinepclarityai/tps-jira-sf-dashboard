@@ -32,16 +32,6 @@ function formatCurrency(amount: number | null) {
   }).format(amount);
 }
 
-function formatDate(dateStr: string) {
-  if (!dateStr) return "--";
-  const date = new Date(dateStr);
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 interface SalesforceTableProps {
   opportunities: SalesforceOpportunity[];
   isLoading: boolean;
@@ -99,54 +89,46 @@ export function SalesforceTable({
       <Table>
         <TableHeader>
           <TableRow className="border-border hover:bg-transparent">
-            <TableHead className="text-muted-foreground">
-              Opportunity
-            </TableHead>
-            <TableHead className="text-muted-foreground">Account</TableHead>
-            <TableHead className="text-muted-foreground">
-              Access Method
-            </TableHead>
+            <TableHead className="text-muted-foreground">Account Name</TableHead>
+            <TableHead className="text-muted-foreground">Access Method</TableHead>
             <TableHead className="text-muted-foreground">Stage</TableHead>
-            <TableHead className="text-muted-foreground text-right">
-              Amount
-            </TableHead>
-            <TableHead className="text-muted-foreground text-right">
-              Probability
-            </TableHead>
+            <TableHead className="text-muted-foreground text-right">Opp ARR</TableHead>
             <TableHead className="text-muted-foreground">Owner</TableHead>
-            <TableHead className="text-muted-foreground">Close Date</TableHead>
-            <TableHead className="text-muted-foreground sr-only">
-              Link
-            </TableHead>
+            <TableHead className="text-muted-foreground sr-only">Link</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {opportunities.map((opp) => (
             <TableRow key={opp.id} className="border-border">
-              <TableCell className="max-w-[250px]">
-                <span
-                  className="truncate block text-foreground font-medium"
-                  title={opp.name}
-                >
-                  {opp.name}
-                </span>
-              </TableCell>
               <TableCell>
-                <span className="text-sm text-muted-foreground">
-                  {opp.accountName}
-                </span>
+                {opp.url ? (
+                  <a
+                    href={opp.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-medium text-foreground hover:text-primary transition-colors inline-flex items-center gap-1.5"
+                    title={opp.name}
+                  >
+                    {opp.accountName || "--"}
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                  </a>
+                ) : (
+                  <span className="text-sm font-medium text-foreground">
+                    {opp.accountName || "--"}
+                  </span>
+                )}
               </TableCell>
               <TableCell>
                 <Badge
                   variant="outline"
                   className={getAccessMethodColor(opp.accessMethod)}
                 >
-                  {opp.accessMethod}
+                  {opp.accessMethod || "--"}
                 </Badge>
               </TableCell>
               <TableCell>
-                <span className="text-xs text-muted-foreground">
-                  {opp.stageName}
+                <span className="text-sm text-muted-foreground">
+                  {opp.stageName || "--"}
                 </span>
               </TableCell>
               <TableCell className="text-right">
@@ -154,31 +136,23 @@ export function SalesforceTable({
                   {formatCurrency(opp.amount)}
                 </span>
               </TableCell>
-              <TableCell className="text-right">
-                <span className="font-mono text-sm text-muted-foreground">
-                  {opp.probability !== null ? `${opp.probability}%` : "--"}
-                </span>
-              </TableCell>
               <TableCell>
                 <span className="text-sm text-muted-foreground">
-                  {opp.ownerName}
+                  {opp.ownerName || "--"}
                 </span>
               </TableCell>
               <TableCell>
-                <span className="text-xs text-muted-foreground font-mono">
-                  {formatDate(opp.closeDate)}
-                </span>
-              </TableCell>
-              <TableCell>
-                <a
-                  href={opp.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-muted-foreground hover:text-primary transition-colors"
-                  aria-label={`Open ${opp.name} in Salesforce`}
-                >
-                  <ExternalLink className="h-4 w-4" />
-                </a>
+                {opp.url && (
+                  <a
+                    href={opp.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-muted-foreground hover:text-primary transition-colors sr-only"
+                    aria-label={`Open ${opp.name} in Salesforce`}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
               </TableCell>
             </TableRow>
           ))}
