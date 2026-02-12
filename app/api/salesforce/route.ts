@@ -146,24 +146,34 @@ function rowsToRecords(raw: string[][]): Record<string, string>[] {
   });
 }
 
+/**
+ * FIXED: findColumn now strictly checks if the ROW KEY contains the CANDIDATE.
+ * It no longer checks if the CANDIDATE contains the ROW KEY.
+ * This prevents "Opportunity ID" search from matching "Opportunity" (Name) column.
+ */
 function findColumn(
   row: Record<string, string>,
   ...candidates: string[]
 ): string {
+  const rowKeys = Object.keys(row);
+
+  // 1. Exact match (Priority)
   for (const candidate of candidates) {
-    const exactKey = Object.keys(row).find(
+    const exactKey = rowKeys.find(
       (k) => k.toLowerCase().trim() === candidate.toLowerCase().trim()
     );
     if (exactKey && row[exactKey]) return row[exactKey];
   }
+
+  // 2. Partial match: Does the Sheet Header (k) INCLUDE the Candidate?
+  // e.g. "Opportunity ID (18)" includes "Opportunity ID" -> MATCH
   for (const candidate of candidates) {
-    const partialKey = Object.keys(row).find(
-      (k) =>
-        k.toLowerCase().trim().includes(candidate.toLowerCase().trim()) ||
-        candidate.toLowerCase().trim().includes(k.toLowerCase().trim())
+    const partialKey = rowKeys.find(
+      (k) => k.toLowerCase().trim().includes(candidate.toLowerCase().trim())
     );
     if (partialKey && row[partialKey]) return row[partialKey];
   }
+
   return "";
 }
 
@@ -205,7 +215,9 @@ function mapToOpportunity(
   row: Record<string, string>,
   idx: number
 ): SalesforceOpportunity {
-  const oppId = findColumn(row, "Opportunity ID", "OPPORTUNITY_ID", "Q1");
+  // FIXED: Added "Id" and "Opp Id" to candidates
+  const oppId = findColumn(row, "Opportunity ID", "OPPORTUNITY_ID", "Id", "Opp Id", "Q1");
+
   return {
     id: oppId || `row-${idx}`,
     name: findColumn(row, "Opportunity Name", "Name", "Opportunity"),
