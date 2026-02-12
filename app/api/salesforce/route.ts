@@ -205,7 +205,7 @@ function mapToOpportunity(
   row: Record<string, string>,
   idx: number
 ): SalesforceOpportunity {
-  const oppId = findColumn(row, "Opportunity ID", "OPPORTUNITY_ID");
+  const oppId = findColumn(row, "Opportunity ID", "OPPORTUNITY_ID", "Q1");
   return {
     id: oppId || `row-${idx}`,
     name: findColumn(row, "Opportunity Name", "Name", "Opportunity"),
