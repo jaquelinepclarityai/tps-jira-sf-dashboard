@@ -49,45 +49,61 @@ async function fetchViaServiceAccount(): Promise<string[][] | null> {
 }
 
 // ──────────────────────────────────────────────
-// CSV fallback with retry (unauthenticated)
+// ROBUST CSV PARSER (Handles newlines in cells)
 // ──────────────────────────────────────────────
-function parseCSVRow(row: string): string[] {
-  const result: string[] = [];
-  let current = "";
+function parseCSV(text: string): Record<string, string>[] {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentVal = "";
   let insideQuotes = false;
 
-  for (let i = 0; i < row.length; i++) {
-    const char = row[i];
+  // Clean up BOM and standardizes line endings
+  const cleanText = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
+
     if (char === '"') {
-      if (insideQuotes && row[i + 1] === '"') {
-        current += '"';
-        i++;
+      if (insideQuotes && nextChar === '"') {
+        // Escaped quote ("") inside a quoted string
+        currentVal += '"';
+        i++; // skip next char
       } else {
+        // Toggle quote state
         insideQuotes = !insideQuotes;
       }
     } else if (char === "," && !insideQuotes) {
-      result.push(current.trim());
-      current = "";
+      // End of cell
+      currentRow.push(currentVal.trim());
+      currentVal = "";
+    } else if (char === "\n" && !insideQuotes) {
+      // End of row
+      currentRow.push(currentVal.trim());
+      if (currentRow.length > 0) rows.push(currentRow);
+      currentRow = [];
+      currentVal = "";
     } else {
-      current += char;
+      currentVal += char;
     }
   }
-  result.push(current.trim());
-  return result;
-}
 
-function parseCSV(text: string): Record<string, string>[] {
-  const lines = text.split("\n").filter((line) => line.trim() !== "");
-  if (lines.length < 2) return [];
+  // Push the final row if exists
+  if (currentVal || currentRow.length > 0) {
+    currentRow.push(currentVal.trim());
+    rows.push(currentRow);
+  }
 
-  const headers = parseCSVRow(lines[0]);
-  return lines.slice(1).map((line) => {
-    const values = parseCSVRow(line);
-    const row: Record<string, string> = {};
+  if (rows.length < 2) return [];
+
+  const headers = rows[0];
+  return rows.slice(1).map((values) => {
+    const rowObj: Record<string, string> = {};
     headers.forEach((header, idx) => {
-      row[header] = values[idx] || "";
+      // Use header as key, avoid empty keys
+      if (header) rowObj[header] = values[idx] || "";
     });
-    return row;
+    return rowObj;
   });
 }
 
@@ -95,8 +111,7 @@ async function fetchSingleCSV(csvUrl: string): Promise<Record<string, string>[] 
   const res = await fetch(csvUrl, {
     cache: "no-store",
     headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
       Accept: "text/csv,text/plain,*/*",
     },
   });
@@ -116,14 +131,12 @@ async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
     `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}`,
   ];
 
-  // Try each URL with up to 2 retries per URL
   for (const csvUrl of urls) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const rows = await fetchSingleCSV(csvUrl);
         if (rows) return rows;
       } catch {
-        // Wait before retry
         if (attempt < 1) await new Promise((r) => setTimeout(r, 1000));
       }
     }
@@ -147,9 +160,9 @@ function rowsToRecords(raw: string[][]): Record<string, string>[] {
 }
 
 /**
- * FIXED: findColumn now strictly checks if the ROW KEY contains the CANDIDATE.
- * It no longer checks if the CANDIDATE contains the ROW KEY.
- * This prevents "Opportunity ID" search from matching "Opportunity" (Name) column.
+ * FIXED: Strictly matches columns. 
+ * Prevents "Source Opportunity ID" from matching "Opportunity ID".
+ * Prioritizes Exact Match > Starts With.
  */
 function findColumn(
   row: Record<string, string>,
@@ -165,11 +178,12 @@ function findColumn(
     if (exactKey && row[exactKey]) return row[exactKey];
   }
 
-  // 2. Partial match: Does the Sheet Header (k) INCLUDE the Candidate?
-  // e.g. "Opportunity ID (18)" includes "Opportunity ID" -> MATCH
+  // 2. Starts With (Safe partial match)
+  // e.g. "Opportunity ID (18 char)" STARTS WITH "Opportunity ID" -> Match
+  // e.g. "Source Opportunity ID" DOES NOT start with "Opportunity ID" -> No Match
   for (const candidate of candidates) {
     const partialKey = rowKeys.find(
-      (k) => k.toLowerCase().trim().includes(candidate.toLowerCase().trim())
+      (k) => k.toLowerCase().trim().startsWith(candidate.toLowerCase().trim())
     );
     if (partialKey && row[partialKey]) return row[partialKey];
   }
@@ -179,15 +193,11 @@ function findColumn(
 
 function parseAmount(value: string): number | null {
   if (!value) return null;
-  // Handle European format: "1.234.567,89" -> "1234567.89"
-  // Handle US format: "1,234,567.89" -> "1234567.89"
   let cleaned = value.replace(/[^0-9.,-]/g, "");
-  // If last separator is a comma followed by 1-2 digits (European decimal), convert
   const europeanMatch = cleaned.match(/^([0-9.]*),(\d{1,2})$/);
   if (europeanMatch) {
     cleaned = europeanMatch[1].replace(/\./g, "") + "." + europeanMatch[2];
   } else {
-    // US format or no decimals: remove commas
     cleaned = cleaned.replace(/,/g, "");
   }
   const num = parseFloat(cleaned);
@@ -215,8 +225,8 @@ function mapToOpportunity(
   row: Record<string, string>,
   idx: number
 ): SalesforceOpportunity {
-  // FIXED: Added "Id" and "Opp Id" to candidates
-  const oppId = findColumn(row, "Opportunity ID", "OPPORTUNITY_ID", "Id", "Opp Id", "Q1");
+  // Ordered by priority. Removed generic "Id" to avoid matching "Account Id"
+  const oppId = findColumn(row, "Opportunity ID", "OPPORTUNITY_ID", "Opp Id", "Q1");
 
   return {
     id: oppId || `row-${idx}`,
@@ -334,12 +344,6 @@ export async function GET() {
 
     const mappedDD = dueDiligence.map(mapToOpportunity);
     const mappedSA = standingApart.map(mapToOpportunity);
-    if (mappedDD.length > 0) {
-      console.log("[v0] Sample DD opp:", JSON.stringify({ id: mappedDD[0].id, url: mappedDD[0].url, accountName: mappedDD[0].accountName }));
-    }
-    if (mappedSA.length > 0) {
-      console.log("[v0] Sample SA opp:", JSON.stringify({ id: mappedSA[0].id, url: mappedSA[0].url, accountName: mappedSA[0].accountName }));
-    }
 
     return NextResponse.json({
       dueDiligence: mappedDD,
