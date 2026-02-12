@@ -320,9 +320,18 @@ export async function GET() {
       return stageMatch && hasApiOrDatafeed(row);
     });
 
+    const mappedDD = dueDiligence.map(mapToOpportunity);
+    const mappedSA = standingApart.map(mapToOpportunity);
+    if (mappedDD.length > 0) {
+      console.log("[v0] Sample DD opp:", JSON.stringify({ id: mappedDD[0].id, url: mappedDD[0].url, accountName: mappedDD[0].accountName }));
+    }
+    if (mappedSA.length > 0) {
+      console.log("[v0] Sample SA opp:", JSON.stringify({ id: mappedSA[0].id, url: mappedSA[0].url, accountName: mappedSA[0].accountName }));
+    }
+
     return NextResponse.json({
-      dueDiligence: dueDiligence.map(mapToOpportunity),
-      standingApart: standingApart.map(mapToOpportunity),
+      dueDiligence: mappedDD,
+      standingApart: mappedSA,
       totalDueDiligence: dueDiligence.length,
       totalStandingApart: standingApart.length,
       configured: true,
