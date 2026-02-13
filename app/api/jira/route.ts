@@ -37,11 +37,11 @@ export async function GET() {
           "priority",
           "assignee",
           "reporter",
-          "owner",
           "created",
           "updated",
           "duedate",
           "customfield_10448",
+          "customfield_10449", // Owner field
           "issuetype",
         ],
       }),
@@ -73,10 +73,11 @@ export async function GET() {
           priority: { name: string } | null;
           assignee: { displayName: string } | null;
           reporter: { displayName: string } | null;
-          owner: { displayName: string } | null;
+          customfield_10449: { displayName: string } | null; // Owner field
           created: string;
           updated: string;
           customfield_10448: string | null;
+          duedate: string | null;
           issuetype: { name: string };
         };
       }) => ({
@@ -86,11 +87,8 @@ export async function GET() {
         status: issue.fields.status?.name || "Unknown",
         priority: issue.fields.priority?.name || "None",
         assignee: issue.fields.assignee?.displayName || null,
-        reporter: issue.fields.owner?.displayName || "Unknown",
-        owner:
-          issue.fields.owner?.displayName ||
-          issue.fields.owner?.displayName ||
-          null,
+        reporter: issue.fields.reporter?.displayName || "Unknown",
+        owner: issue.fields.customfield_10449?.displayName || null,
         created: issue.fields.created,
         updated: issue.fields.updated,
         dueDate: issue.fields.customfield_10448 || issue.fields.duedate || null,
