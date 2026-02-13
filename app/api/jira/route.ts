@@ -89,7 +89,6 @@ export async function GET() {
         reporter: issue.fields.reporter?.displayName || "Unknown",
         owner:
           issue.fields.owner?.displayName ||
-          issue.fields.reporter?.displayName ||
           null,
         created: issue.fields.created,
         updated: issue.fields.updated,
