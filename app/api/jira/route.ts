@@ -73,7 +73,7 @@ export async function GET() {
           priority: { name: string } | null;
           assignee: { displayName: string } | null;
           reporter: { displayName: string } | null;
-          creator: { displayName: string } | null;
+          owner: { displayName: string } | null;
           created: string;
           updated: string;
           duedate: string | null;
