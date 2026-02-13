@@ -21,7 +21,7 @@ export function DashboardHeader({
           TPS Dashboard
         </h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Jira Tickets & Salesforce Opportunities
+          Jira Tickets and Salesforce Opportunities
         </p>
       </div>
       <div className="flex items-center gap-3">
