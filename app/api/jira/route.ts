@@ -37,7 +37,7 @@ export async function GET() {
           "priority",
           "assignee",
           "reporter",
-          "creator",
+          "owner",
           "created",
           "updated",
           "duedate",
