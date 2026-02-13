@@ -86,7 +86,7 @@ export async function GET() {
         status: issue.fields.status?.name || "Unknown",
         priority: issue.fields.priority?.name || "None",
         assignee: issue.fields.assignee?.displayName || null,
-        reporter: issue.fields.reporter?.displayName || "Unknown",
+        reporter: issue.fields.OWNER?.displayName || "Unknown",
         owner:
           issue.fields.owner?.displayName ||
           issue.fields.owner?.displayName ||
