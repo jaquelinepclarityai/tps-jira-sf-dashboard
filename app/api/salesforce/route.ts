@@ -190,7 +190,7 @@ function isValidOpportunityId(value: string): boolean {
   return true;
 }
 
-function getOpportunityID(row: Record<string, string>): string {
+function getOpportunityID(row: Record<string, string>, oppName: string = ""): string {
   // Strategy 1: Look for exact known ID columns
   const exactCandidates = [
     "Opportunity ID",
@@ -208,6 +208,7 @@ function getOpportunityID(row: Record<string, string>): string {
   for (const candidate of exactCandidates) {
     const id = findColumn(row, [candidate], true);
     if (id && isValidOpportunityId(id)) {
+      console.log(`✓ Found ID for "${oppName}" in column "${candidate}": ${id}`);
       return to18CharId(id.trim());
     }
   }
@@ -224,6 +225,7 @@ function getOpportunityID(row: Record<string, string>): string {
   for (const key of idLikeKeys) {
     const value = row[key];
     if (value && isValidOpportunityId(value)) {
+      console.log(`✓ Found ID for "${oppName}" in column "${key}": ${value}`);
       return to18CharId(value.trim());
     }
   }
@@ -232,12 +234,20 @@ function getOpportunityID(row: Record<string, string>): string {
   const allEntries = Object.entries(row);
   for (const [key, value] of allEntries) {
     if (value && isValidOpportunityId(value)) {
-      console.log(`Found Opp ID in column "${key}":`, value);
+      console.log(`✓ Found ID for "${oppName}" via brute force in column "${key}": ${value}`);
       return to18CharId(value.trim());
     }
   }
 
-  console.warn("No valid Opportunity ID found in row:", Object.keys(row));
+  // Debug: Show all columns and their values for this opportunity
+  console.error(`✗ NO ID FOUND for "${oppName}"`);
+  console.error("Available columns and values:");
+  Object.entries(row).forEach(([key, value]) => {
+    if (value && value.length < 100) { // Only show short values
+      console.error(`  ${key}: ${value}`);
+    }
+  });
+
   return "";
 }
 
@@ -259,18 +269,12 @@ function mapToOpportunity(
   idx: number
 ): SalesforceOpportunity {
 
-  const oppId = getOpportunityID(row);
-
-  // Debug logging for Due Diligence opportunities without IDs
-  if (!oppId) {
-    const oppName = findColumn(row, ["Opportunity Name", "Name", "Opportunity"]);
-    console.warn(`Missing Opp ID for: ${oppName || `row-${idx}`}`);
-    console.warn("Available columns:", Object.keys(row));
-  }
+  const oppName = findColumn(row, ["Opportunity Name", "Name", "Opportunity"]);
+  const oppId = getOpportunityID(row, oppName);
 
   return {
     id: oppId || `row-${idx}`,
-    name: findColumn(row, ["Opportunity Name", "Name", "Opportunity"]),
+    name: oppName,
     stageName: findColumn(row, ["Stage", "StageName", "Stage Name"]),
     accessMethod: findColumn(row, ["Access Method (Opp)", "Access_Method_Opp__c", "Access Method"]),
     amount: parseAmount(findColumn(row, ["Opp ARR (Master) (converted)", "Amount"])),
@@ -308,6 +312,11 @@ export async function GET() {
       return NextResponse.json({ error: "No data", configured: false }, { status: 200 });
     }
 
+    // DEBUG: Show first row structure
+    if (rows.length > 0) {
+      console.log("📊 First row columns:", Object.keys(rows[0]));
+    }
+
     // Filtering Logic
     const hasAccessMethod = rows.some(r => findColumn(r, ["Access Method", "Access_Method_L__c"]));
 
@@ -325,19 +334,19 @@ export async function GET() {
       }).map((row, idx) => mapToOpportunity(row, idx));
     };
 
+    console.log("\n🔍 Processing Due Diligence opportunities...");
     const dueDiligence = filterOpps("due diligence");
+
+    console.log("\n🔍 Processing Standing Apart opportunities...");
     const standingApart = filterOpps("standing apart");
 
-    // Debug: Log opportunities without valid IDs
+    // Summary
     const ddMissingIds = dueDiligence.filter(opp => !opp.url || opp.id.startsWith('row-'));
     const saMissingIds = standingApart.filter(opp => !opp.url || opp.id.startsWith('row-'));
 
-    if (ddMissingIds.length > 0) {
-      console.warn(`Due Diligence: ${ddMissingIds.length} opportunities missing IDs`);
-    }
-    if (saMissingIds.length > 0) {
-      console.warn(`Standing Apart: ${saMissingIds.length} opportunities missing IDs`);
-    }
+    console.log(`\n📈 Summary:`);
+    console.log(`Due Diligence: ${dueDiligence.length} total, ${ddMissingIds.length} missing IDs`);
+    console.log(`Standing Apart: ${standingApart.length} total, ${saMissingIds.length} missing IDs`);
 
     return NextResponse.json({
       dueDiligence,
