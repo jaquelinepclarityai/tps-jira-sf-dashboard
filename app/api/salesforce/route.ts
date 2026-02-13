@@ -29,9 +29,9 @@ function to18CharId(id: string): string {
 }
 
 // ──────────────────────────────────────────────
-// ROBUST CSV PARSER
+// ROBUST CSV PARSER - Returns raw array structure
 // ──────────────────────────────────────────────
-function parseCSV(text: string): Record<string, string>[] {
+function parseCSV(text: string): string[][] {
   const rows: string[][] = [];
   let currentRow: string[] = [];
   let currentVal = "";
@@ -68,15 +68,18 @@ function parseCSV(text: string): Record<string, string>[] {
     rows.push(currentRow);
   }
 
-  if (rows.length < 2) return [];
+  return rows;
+}
 
-  const headers = rows[0];
-  return rows.slice(1).map((values) => {
-    const rowObj: Record<string, string> = {};
+function rowsToRecords(raw: string[][]): Record<string, string>[] {
+  if (!raw || raw.length < 2) return [];
+  const headers = raw[0];
+  return raw.slice(1).map((values) => {
+    const row: Record<string, string> = {};
     headers.forEach((header, idx) => {
-      if (header) rowObj[header] = values[idx] || "";
+      row[header] = values[idx] || "";
     });
-    return rowObj;
+    return row;
   });
 }
 
@@ -120,25 +123,16 @@ async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
       if (res.ok) {
         const text = await res.text();
         if (!text.trim().startsWith("<")) {
-          const rows = parseCSV(text);
+          const rawRows = parseCSV(text);
+          const rows = rowsToRecords(rawRows);
           if (rows.length > 0) return rows;
         }
       }
-    } catch (e) { console.error("CSV fetch failed", e); }
+    } catch (e) {
+      console.error("CSV fetch failed", e);
+    }
   }
   return null;
-}
-
-function rowsToRecords(raw: string[][]): Record<string, string>[] {
-  if (!raw || raw.length < 2) return [];
-  const headers = raw[0];
-  return raw.slice(1).map((values) => {
-    const row: Record<string, string> = {};
-    headers.forEach((header, idx) => {
-      row[header] = values[idx] || "";
-    });
-    return row;
-  });
 }
 
 // ──────────────────────────────────────────────
@@ -156,7 +150,7 @@ function findColumn(
     const exactKey = rowKeys.find(
       (k) => k.toLowerCase().trim() === candidate.toLowerCase().trim()
     );
-    if (exactKey) return row[exactKey];
+    if (exactKey && row[exactKey]) return row[exactKey];
   }
 
   // 2. Partial Match (Only if strict mode is OFF)
@@ -165,88 +159,40 @@ function findColumn(
       const partialKey = rowKeys.find(
         (k) => k.toLowerCase().trim().includes(candidate.toLowerCase().trim())
       );
-      if (partialKey) return row[partialKey];
+      if (partialKey && row[partialKey]) return row[partialKey];
     }
   }
   return "";
 }
 
 // ──────────────────────────────────────────────
-// IMPROVED: Validate Salesforce Opportunity ID
+// Get Opportunity ID - SIMPLIFIED
 // ──────────────────────────────────────────────
-function isValidOpportunityId(value: string): boolean {
-  if (!value) return false;
-  const trimmed = value.trim();
+function getOpportunityID(row: Record<string, string>): string {
+  // Get all keys
+  const keys = Object.keys(row);
 
-  // Must start with 006 (Opportunity prefix in Salesforce)
-  if (!trimmed.startsWith("006")) return false;
+  // Try to find "Opportunity ID" column (exact match, case-insensitive)
+  const oppIdKey = keys.find(k =>
+    k.toLowerCase().trim() === "opportunity id"
+  );
 
-  // Must be exactly 15 or 18 characters
-  if (trimmed.length !== 15 && trimmed.length !== 18) return false;
-
-  // Must contain only alphanumeric characters
-  if (!/^[a-zA-Z0-9]+$/.test(trimmed)) return false;
-
-  return true;
-}
-
-function getOpportunityID(row: Record<string, string>, oppName: string = ""): string {
-  // Strategy 1: Look for exact known ID columns
-  const exactCandidates = [
-    "Opportunity ID",
-    "Opportunity Id",
-    "OpportunityId",
-    "OPPORTUNITY_ID",
-    "Opp ID",
-    "Opp Id",
-    "OppId",
-    "Id",
-    "ID",
-  ];
-
-  // Try exact column matches first
-  for (const candidate of exactCandidates) {
-    const id = findColumn(row, [candidate], true);
-    if (id && isValidOpportunityId(id)) {
-      console.log(`✓ Found ID for "${oppName}" in column "${candidate}": ${id}`);
-      return to18CharId(id.trim());
+  if (oppIdKey) {
+    const value = row[oppIdKey]?.trim();
+    if (value && value.startsWith("006") && (value.length === 15 || value.length === 18)) {
+      return to18CharId(value);
     }
   }
 
-  // Strategy 2: Scan all column names that contain "id" or "opp"
-  const rowKeys = Object.keys(row);
-  const idLikeKeys = rowKeys.filter(key => {
-    const lower = key.toLowerCase();
-    return (lower.includes("id") || lower.includes("opp")) &&
-      !lower.includes("account") &&
-      !lower.includes("owner");
-  });
-
-  for (const key of idLikeKeys) {
-    const value = row[key];
-    if (value && isValidOpportunityId(value)) {
-      console.log(`✓ Found ID for "${oppName}" in column "${key}": ${value}`);
-      return to18CharId(value.trim());
+  // Fallback: Scan all values for anything that looks like an Opp ID
+  for (const [key, value] of Object.entries(row)) {
+    if (value) {
+      const trimmed = value.trim();
+      if (trimmed.startsWith("006") && (trimmed.length === 15 || trimmed.length === 18) && /^[a-zA-Z0-9]+$/.test(trimmed)) {
+        return to18CharId(trimmed);
+      }
     }
   }
-
-  // Strategy 3: Brute force scan all values
-  const allEntries = Object.entries(row);
-  for (const [key, value] of allEntries) {
-    if (value && isValidOpportunityId(value)) {
-      console.log(`✓ Found ID for "${oppName}" via brute force in column "${key}": ${value}`);
-      return to18CharId(value.trim());
-    }
-  }
-
-  // Debug: Show all columns and their values for this opportunity
-  console.error(`✗ NO ID FOUND for "${oppName}"`);
-  console.error("Available columns and values:");
-  Object.entries(row).forEach(([key, value]) => {
-    if (value && value.length < 100) { // Only show short values
-      console.error(`  ${key}: ${value}`);
-    }
-  });
 
   return "";
 }
@@ -269,8 +215,8 @@ function mapToOpportunity(
   idx: number
 ): SalesforceOpportunity {
 
+  const oppId = getOpportunityID(row);
   const oppName = findColumn(row, ["Opportunity Name", "Name", "Opportunity"]);
-  const oppId = getOpportunityID(row, oppName);
 
   return {
     id: oppId || `row-${idx}`,
@@ -312,11 +258,6 @@ export async function GET() {
       return NextResponse.json({ error: "No data", configured: false }, { status: 200 });
     }
 
-    // DEBUG: Show first row structure
-    if (rows.length > 0) {
-      console.log("📊 First row columns:", Object.keys(rows[0]));
-    }
-
     // Filtering Logic
     const hasAccessMethod = rows.some(r => findColumn(r, ["Access Method", "Access_Method_L__c"]));
 
@@ -334,19 +275,8 @@ export async function GET() {
       }).map((row, idx) => mapToOpportunity(row, idx));
     };
 
-    console.log("\n🔍 Processing Due Diligence opportunities...");
     const dueDiligence = filterOpps("due diligence");
-
-    console.log("\n🔍 Processing Standing Apart opportunities...");
     const standingApart = filterOpps("standing apart");
-
-    // Summary
-    const ddMissingIds = dueDiligence.filter(opp => !opp.url || opp.id.startsWith('row-'));
-    const saMissingIds = standingApart.filter(opp => !opp.url || opp.id.startsWith('row-'));
-
-    console.log(`\n📈 Summary:`);
-    console.log(`Due Diligence: ${dueDiligence.length} total, ${ddMissingIds.length} missing IDs`);
-    console.log(`Standing Apart: ${standingApart.length} total, ${saMissingIds.length} missing IDs`);
 
     return NextResponse.json({
       dueDiligence,
