@@ -6,7 +6,30 @@ const TAB_NAME = "SF Opps info";
 const SHEET_GID = "94718738";
 
 // ──────────────────────────────────────────────
-// ROBUST CSV PARSER (Handles newlines in cells)
+// 15-to-18 Character Converter
+// ──────────────────────────────────────────────
+function to18CharId(id: string): string {
+  if (!id) return "";
+  id = id.trim();
+  if (id.length === 18) return id;
+  if (id.length !== 15) return id; // Return original if not 15 or 18
+
+  let suffix = "";
+  for (let i = 0; i < 3; i++) {
+    let flags = 0;
+    for (let j = 0; j < 5; j++) {
+      const char = id.charAt(i * 5 + j);
+      if (char >= "A" && char <= "Z") {
+        flags += 1 << j;
+      }
+    }
+    suffix += "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".charAt(flags);
+  }
+  return id + suffix;
+}
+
+// ──────────────────────────────────────────────
+// ROBUST CSV PARSER
 // ──────────────────────────────────────────────
 function parseCSV(text: string): Record<string, string>[] {
   const rows: string[][] = [];
@@ -14,7 +37,6 @@ function parseCSV(text: string): Record<string, string>[] {
   let currentVal = "";
   let insideQuotes = false;
 
-  // Clean up BOM and standardize line endings
   const cleanText = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   for (let i = 0; i < cleanText.length; i++) {
@@ -49,9 +71,6 @@ function parseCSV(text: string): Record<string, string>[] {
   if (rows.length < 2) return [];
 
   const headers = rows[0];
-  // DEBUG: Print headers to see what we are actually working with
-  console.log("CSV Headers found:", headers);
-
   return rows.slice(1).map((values) => {
     const rowObj: Record<string, string> = {};
     headers.forEach((header, idx) => {
@@ -64,37 +83,29 @@ function parseCSV(text: string): Record<string, string>[] {
 // ──────────────────────────────────────────────
 // Fetchers
 // ──────────────────────────────────────────────
-
-async function fetchViaAPIKey(): Promise<Record<string, string>[] | null> {
-  const apiKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY; // Using env var as API key if configured that way
-  if (!apiKey || apiKey.includes("BEGIN PRIVATE KEY")) return null;
-
-  const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${encodeURIComponent(TAB_NAME)}?key=${apiKey}`;
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) return null;
-  const data = await res.json();
-  return rowsToRecords(data.values);
-}
-
 async function fetchViaServiceAccount(): Promise<Record<string, string>[] | null> {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   if (!email || !rawKey || !rawKey.includes("BEGIN PRIVATE KEY")) return null;
 
-  const { google } = await import("googleapis");
-  const auth = new google.auth.JWT({
-    email,
-    key: rawKey.replace(/\\n/g, "\n"),
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
+  try {
+    const { google } = await import("googleapis");
+    const auth = new google.auth.JWT({
+      email,
+      key: rawKey.replace(/\\n/g, "\n"),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
+    });
 
-  const sheets = google.sheets({ version: "v4", auth });
-  const res = await sheets.spreadsheets.values.get({
-    spreadsheetId: SHEET_ID,
-    range: `'${TAB_NAME}'`,
-  });
-
-  return rowsToRecords(res.data.values as string[][]);
+    const sheets = google.sheets({ version: "v4", auth });
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `'${TAB_NAME}'`,
+    });
+    return rowsToRecords(res.data.values as string[][]);
+  } catch (e) {
+    console.error("Service Account Error:", e);
+    return null;
+  }
 }
 
 async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
@@ -131,7 +142,7 @@ function rowsToRecords(raw: string[][]): Record<string, string>[] {
 }
 
 // ──────────────────────────────────────────────
-// STRICT COLUMN FINDER
+// Column Finders
 // ──────────────────────────────────────────────
 function findColumn(
   row: Record<string, string>,
@@ -140,7 +151,7 @@ function findColumn(
 ): string {
   const rowKeys = Object.keys(row);
 
-  // 1. Exact Match (Case Insensitive)
+  // 1. Exact Match
   for (const candidate of candidates) {
     const exactKey = rowKeys.find(
       (k) => k.toLowerCase().trim() === candidate.toLowerCase().trim()
@@ -157,13 +168,11 @@ function findColumn(
       if (partialKey) return row[partialKey];
     }
   }
-
   return "";
 }
 
 function getOpportunityID(row: Record<string, string>): string {
-  // STRICT SEARCH: Do not allow partial matches like "Source Opportunity ID"
-  // Only accept columns that are EXACTLY one of these:
+  // Strategy 1: Look for exact known ID columns
   const exactCandidates = [
     "Opportunity ID",
     "Opportunity Id",
@@ -173,26 +182,26 @@ function getOpportunityID(row: Record<string, string>): string {
     "Opp Id"
   ];
 
-  const id = findColumn(row, exactCandidates, true); // True = Strict Mode
+  let id = findColumn(row, exactCandidates, true); // Strict Mode
 
-  // Sanity check: Salesforce IDs are usually 15 or 18 chars and start with 006
-  if (id && id.length >= 15 && id.startsWith("006")) {
-    return id;
+  // Validate: Must look like an Opp ID (starts with 006)
+  if (id && id.trim().length >= 15 && id.trim().startsWith("006")) {
+    return to18CharId(id);
   }
 
-  // If strict match failed, try to find a column that contains "Opportunity ID" 
-  // BUT exclude "Account", "Owner", "Source", "Parent"
-  const keys = Object.keys(row);
-  const looseKey = keys.find(k => {
-    const lower = k.toLowerCase();
-    return lower.includes("opportunity id") &&
-      !lower.includes("account") &&
-      !lower.includes("owner") &&
-      !lower.includes("source") &&
-      !lower.includes("parent");
+  // Strategy 2: Brute Force Scan
+  // If the named column failed, look at EVERY value in the row.
+  // We return the first value that looks exactly like a Salesforce Opportunity ID.
+  const allValues = Object.values(row);
+  const foundId = allValues.find(val => {
+    const v = val.trim();
+    // Must start with 006 and be 15 or 18 chars
+    return v.startsWith("006") && (v.length === 15 || v.length === 18);
   });
 
-  if (looseKey) return row[looseKey];
+  if (foundId) {
+    return to18CharId(foundId);
+  }
 
   return "";
 }
@@ -243,17 +252,11 @@ export async function GET() {
     let rows: Record<string, string>[] | null = null;
     let source = "";
 
-    // Priority 1: Service Account (Best for reliable parsing)
+    // 1. Service Account
     rows = await fetchViaServiceAccount();
     if (rows) source = "service-account";
 
-    // Priority 2: API Key
-    if (!rows) {
-      rows = await fetchViaAPIKey();
-      if (rows) source = "api-key";
-    }
-
-    // Priority 3: CSV Fallback
+    // 2. CSV Fallback
     if (!rows) {
       rows = await fetchViaCSV();
       if (rows) source = "csv";
