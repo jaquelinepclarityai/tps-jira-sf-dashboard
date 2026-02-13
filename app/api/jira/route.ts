@@ -76,7 +76,6 @@ export async function GET() {
           owner: { displayName: string } | null;
           created: string;
           updated: string;
-          duedate: string | null;
           customfield_10448: string | null;
           issuetype: { name: string };
         };
