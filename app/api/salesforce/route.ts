@@ -12,7 +12,7 @@ function to18CharId(id: string): string {
   if (!id) return "";
   id = id.trim();
   if (id.length === 18) return id;
-  if (id.length !== 15) return id; // Return original if not 15 or 18
+  if (id.length !== 15) return id;
 
   let suffix = "";
   for (let i = 0; i < 3; i++) {
@@ -171,38 +171,73 @@ function findColumn(
   return "";
 }
 
+// ──────────────────────────────────────────────
+// IMPROVED: Validate Salesforce Opportunity ID
+// ──────────────────────────────────────────────
+function isValidOpportunityId(value: string): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+
+  // Must start with 006 (Opportunity prefix in Salesforce)
+  if (!trimmed.startsWith("006")) return false;
+
+  // Must be exactly 15 or 18 characters
+  if (trimmed.length !== 15 && trimmed.length !== 18) return false;
+
+  // Must contain only alphanumeric characters
+  if (!/^[a-zA-Z0-9]+$/.test(trimmed)) return false;
+
+  return true;
+}
+
 function getOpportunityID(row: Record<string, string>): string {
   // Strategy 1: Look for exact known ID columns
   const exactCandidates = [
     "Opportunity ID",
     "Opportunity Id",
+    "OpportunityId",
     "OPPORTUNITY_ID",
+    "Opp ID",
+    "Opp Id",
+    "OppId",
     "Id",
     "ID",
-    "Opp Id"
   ];
 
-  let id = findColumn(row, exactCandidates, true); // Strict Mode
-
-  // Validate: Must look like an Opp ID (starts with 006)
-  if (id && id.trim().length >= 15 && id.trim().startsWith("006")) {
-    return to18CharId(id);
+  // Try exact column matches first
+  for (const candidate of exactCandidates) {
+    const id = findColumn(row, [candidate], true);
+    if (id && isValidOpportunityId(id)) {
+      return to18CharId(id.trim());
+    }
   }
 
-  // Strategy 2: Brute Force Scan
-  // If the named column failed, look at EVERY value in the row.
-  // We return the first value that looks exactly like a Salesforce Opportunity ID.
-  const allValues = Object.values(row);
-  const foundId = allValues.find(val => {
-    const v = val.trim();
-    // Must start with 006 and be 15 or 18 chars
-    return v.startsWith("006") && (v.length === 15 || v.length === 18);
+  // Strategy 2: Scan all column names that contain "id" or "opp"
+  const rowKeys = Object.keys(row);
+  const idLikeKeys = rowKeys.filter(key => {
+    const lower = key.toLowerCase();
+    return (lower.includes("id") || lower.includes("opp")) &&
+      !lower.includes("account") &&
+      !lower.includes("owner");
   });
 
-  if (foundId) {
-    return to18CharId(foundId);
+  for (const key of idLikeKeys) {
+    const value = row[key];
+    if (value && isValidOpportunityId(value)) {
+      return to18CharId(value.trim());
+    }
   }
 
+  // Strategy 3: Brute force scan all values
+  const allEntries = Object.entries(row);
+  for (const [key, value] of allEntries) {
+    if (value && isValidOpportunityId(value)) {
+      console.log(`Found Opp ID in column "${key}":`, value);
+      return to18CharId(value.trim());
+    }
+  }
+
+  console.warn("No valid Opportunity ID found in row:", Object.keys(row));
   return "";
 }
 
@@ -225,6 +260,13 @@ function mapToOpportunity(
 ): SalesforceOpportunity {
 
   const oppId = getOpportunityID(row);
+
+  // Debug logging for Due Diligence opportunities without IDs
+  if (!oppId) {
+    const oppName = findColumn(row, ["Opportunity Name", "Name", "Opportunity"]);
+    console.warn(`Missing Opp ID for: ${oppName || `row-${idx}`}`);
+    console.warn("Available columns:", Object.keys(row));
+  }
 
   return {
     id: oppId || `row-${idx}`,
@@ -280,11 +322,22 @@ export async function GET() {
         const isApiOrFeed = method.includes("api") || method.includes("data feed") || method.includes("datafeed");
 
         return matchesStage && isApiOrFeed;
-      }).map(mapToOpportunity);
+      }).map((row, idx) => mapToOpportunity(row, idx));
     };
 
     const dueDiligence = filterOpps("due diligence");
     const standingApart = filterOpps("standing apart");
+
+    // Debug: Log opportunities without valid IDs
+    const ddMissingIds = dueDiligence.filter(opp => !opp.url || opp.id.startsWith('row-'));
+    const saMissingIds = standingApart.filter(opp => !opp.url || opp.id.startsWith('row-'));
+
+    if (ddMissingIds.length > 0) {
+      console.warn(`Due Diligence: ${ddMissingIds.length} opportunities missing IDs`);
+    }
+    if (saMissingIds.length > 0) {
+      console.warn(`Standing Apart: ${saMissingIds.length} opportunities missing IDs`);
+    }
 
     return NextResponse.json({
       dueDiligence,
