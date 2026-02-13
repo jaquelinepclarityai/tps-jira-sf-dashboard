@@ -1,116 +1,350 @@
 import { NextResponse } from "next/server";
-import type { JiraTicket } from "@/lib/types";
+import type { SalesforceOpportunity } from "@/lib/types";
 
-export async function GET() {
-  const baseUrl = process.env.JIRA_BASE_URL;
-  const email = process.env.JIRA_EMAIL;
-  const apiToken = process.env.JIRA_API_TOKEN;
-  const filterId = process.env.JIRA_FILTER_ID;
+const SHEET_ID = "1e6CRPOHJuHDaLqiHfTqIlaf8zW_3pVWBgGadeFIN7Xw";
+const TAB_NAME = "SF Opps info";
+const SHEET_GID = "94718738";
 
-  if (!baseUrl || !email || !apiToken || !filterId) {
-    return NextResponse.json(
-      {
-        error: "Missing Jira configuration",
-        tickets: [],
-        configured: false,
-      },
-      { status: 200 }
-    );
+// ──────────────────────────────────────────────
+// 15-to-18 Character Converter
+// ──────────────────────────────────────────────
+function to18CharId(id: string): string {
+  if (!id) return "";
+  id = id.trim();
+  if (id.length === 18) return id;
+  if (id.length !== 15) return id;
+
+  let suffix = "";
+  for (let i = 0; i < 3; i++) {
+    let flags = 0;
+    for (let j = 0; j < 5; j++) {
+      const char = id.charAt(i * 5 + j);
+      if (char >= "A" && char <= "Z") {
+        flags += 1 << j;
+      }
+    }
+    suffix += "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345".charAt(flags);
+  }
+  return id + suffix;
+}
+
+// ──────────────────────────────────────────────
+// ROBUST CSV PARSER
+// ──────────────────────────────────────────────
+function parseCSV(text: string): Record<string, string>[] {
+  const rows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentVal = "";
+  let insideQuotes = false;
+
+  const cleanText = text.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  for (let i = 0; i < cleanText.length; i++) {
+    const char = cleanText[i];
+    const nextChar = cleanText[i + 1];
+
+    if (char === '"') {
+      if (insideQuotes && nextChar === '"') {
+        currentVal += '"';
+        i++;
+      } else {
+        insideQuotes = !insideQuotes;
+      }
+    } else if (char === "," && !insideQuotes) {
+      currentRow.push(currentVal.trim());
+      currentVal = "";
+    } else if (char === "\n" && !insideQuotes) {
+      currentRow.push(currentVal.trim());
+      if (currentRow.length > 0) rows.push(currentRow);
+      currentRow = [];
+      currentVal = "";
+    } else {
+      currentVal += char;
+    }
   }
 
-  try {
-    const auth = Buffer.from(`${email}:${apiToken}`).toString("base64");
+  if (currentVal || currentRow.length > 0) {
+    currentRow.push(currentVal.trim());
+    rows.push(currentRow);
+  }
 
-    const response = await fetch(`${baseUrl}/rest/api/3/search/jql`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        jql: `filter=${filterId}`,
-        maxResults: 100,
-        fields: [
-          "summary",
-          "status",
-          "priority",
-          "assignee",
-          "reporter",
-          "created",
-          "updated",
-          "duedate",
-          "customfield_10448",
-          "customfield_10449", // Owner field
-          "issuetype",
-        ],
-      }),
+  if (rows.length < 2) return [];
+
+  const headers = rows[0];
+  return rows.slice(1).map((values) => {
+    const rowObj: Record<string, string> = {};
+    headers.forEach((header, idx) => {
+      if (header) rowObj[header] = values[idx] || "";
+    });
+    return rowObj;
+  });
+}
+
+// ──────────────────────────────────────────────
+// Fetchers
+// ──────────────────────────────────────────────
+async function fetchViaServiceAccount(): Promise<Record<string, string>[] | null> {
+  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+  const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+  if (!email || !rawKey || !rawKey.includes("BEGIN PRIVATE KEY")) return null;
+
+  try {
+    const { google } = await import("googleapis");
+    const auth = new google.auth.JWT({
+      email,
+      key: rawKey.replace(/\\n/g, "\n"),
+      scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("Jira API error:", response.status, errorText);
-      return NextResponse.json(
-        {
-          error: `Jira API error: ${response.status}`,
-          errorDetail: errorText.substring(0, 300),
-          tickets: [],
-          configured: true,
-        },
-        { status: 200 }
+    const sheets = google.sheets({ version: "v4", auth });
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: SHEET_ID,
+      range: `'${TAB_NAME}'`,
+    });
+    return rowsToRecords(res.data.values as string[][]);
+  } catch (e) {
+    console.error("Service Account Error:", e);
+    return null;
+  }
+}
+
+async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
+  const urls = [
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GID}`,
+    `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}`,
+  ];
+
+  for (const csvUrl of urls) {
+    try {
+      const res = await fetch(csvUrl, { cache: "no-store" });
+      if (res.ok) {
+        const text = await res.text();
+        if (!text.trim().startsWith("<")) {
+          const rows = parseCSV(text);
+          if (rows.length > 0) return rows;
+        }
+      }
+    } catch (e) { console.error("CSV fetch failed", e); }
+  }
+  return null;
+}
+
+function rowsToRecords(raw: string[][]): Record<string, string>[] {
+  if (!raw || raw.length < 2) return [];
+  const headers = raw[0];
+  return raw.slice(1).map((values) => {
+    const row: Record<string, string> = {};
+    headers.forEach((header, idx) => {
+      row[header] = values[idx] || "";
+    });
+    return row;
+  });
+}
+
+// ──────────────────────────────────────────────
+// IMPROVED Column Finder - handles hidden characters
+// ──────────────────────────────────────────────
+function findColumn(
+  row: Record<string, string>,
+  candidates: string[],
+  strict = false
+): string {
+  const rowKeys = Object.keys(row);
+
+  // Normalize function to handle special characters
+  const normalize = (str: string) =>
+    str.toLowerCase()
+      .trim()
+      .replace(/\s+/g, ' ')  // Normalize whitespace
+      .replace(/[^\w\s]/g, ''); // Remove special chars
+
+  // 1. Exact Match (with normalization)
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalize(candidate);
+    const exactKey = rowKeys.find(
+      (k) => normalize(k) === normalizedCandidate
+    );
+    if (exactKey && row[exactKey]) return row[exactKey];
+  }
+
+  // 2. Partial Match (Only if strict mode is OFF)
+  if (!strict) {
+    for (const candidate of candidates) {
+      const normalizedCandidate = normalize(candidate);
+      const partialKey = rowKeys.find(
+        (k) => normalize(k).includes(normalizedCandidate)
       );
+      if (partialKey && row[partialKey]) return row[partialKey];
+    }
+  }
+  return "";
+}
+
+// ──────────────────────────────────────────────
+// Validate Salesforce Opportunity ID
+// ──────────────────────────────────────────────
+function isValidOpportunityId(value: string): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+
+  if (!trimmed.startsWith("006")) return false;
+  if (trimmed.length !== 15 && trimmed.length !== 18) return false;
+  if (!/^[a-zA-Z0-9]+$/.test(trimmed)) return false;
+
+  return true;
+}
+
+function getOpportunityID(row: Record<string, string>): string {
+  // Primary candidates - exact column names from the sheet
+  const primaryCandidates = [
+    "OPPORTUNITY_ID",
+    "Opportunity ID",
+    "Opportunity Id",
+  ];
+
+  // Try primary candidates first
+  for (const candidate of primaryCandidates) {
+    const id = findColumn(row, [candidate], true);
+    if (id && isValidOpportunityId(id)) {
+      return to18CharId(id.trim());
+    }
+  }
+
+  // Secondary candidates
+  const secondaryCandidates = [
+    "OpportunityId",
+    "Opp ID",
+    "Opp Id",
+    "OppId",
+    "Id",
+    "ID",
+  ];
+
+  for (const candidate of secondaryCandidates) {
+    const id = findColumn(row, [candidate], true);
+    if (id && isValidOpportunityId(id)) {
+      return to18CharId(id.trim());
+    }
+  }
+
+  // Strategy 2: Look for any column with "id" in the name (not account/owner)
+  const rowKeys = Object.keys(row);
+  const idLikeKeys = rowKeys.filter(key => {
+    const lower = key.toLowerCase().replace(/\s+/g, '').replace(/[^\w]/g, '');
+    return (lower.includes("id") || lower.includes("opp")) &&
+      !lower.includes("account") &&
+      !lower.includes("owner");
+  });
+
+  for (const key of idLikeKeys) {
+    const value = row[key];
+    if (value && isValidOpportunityId(value)) {
+      return to18CharId(value.trim());
+    }
+  }
+
+  // Strategy 3: Brute force - scan all values
+  const allEntries = Object.entries(row);
+  for (const [key, value] of allEntries) {
+    if (value && isValidOpportunityId(value)) {
+      return to18CharId(value.trim());
+    }
+  }
+
+  return "";
+}
+
+function parseAmount(value: string): number | null {
+  if (!value) return null;
+  let cleaned = value.replace(/[^0-9.,-]/g, "");
+  const europeanMatch = cleaned.match(/^([0-9.]*),(\d{1,2})$/);
+  if (europeanMatch) {
+    cleaned = europeanMatch[1].replace(/\./g, "") + "." + europeanMatch[2];
+  } else {
+    cleaned = cleaned.replace(/,/g, "");
+  }
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+function mapToOpportunity(
+  row: Record<string, string>,
+  idx: number
+): SalesforceOpportunity {
+
+  const oppId = getOpportunityID(row);
+
+  return {
+    id: oppId || `row-${idx}`,
+    name: findColumn(row, ["Opportunity Name", "Name", "Opportunity"]),
+    stageName: findColumn(row, ["Stage", "StageName", "Stage Name"]),
+    accessMethod: findColumn(row, ["Access Method (Opp)", "Access_Method_Opp__c", "Access Method"]),
+    amount: parseAmount(findColumn(row, ["Opp ARR (Master) (converted)", "Amount"])),
+    closeDate: findColumn(row, ["Close Date", "CloseDate", "Close"]),
+    accountName: findColumn(row, ["Account Name", "Account", "AccountName"]),
+    ownerName: findColumn(row, ["Opportunity Owner", "Owner", "Owner Name"]),
+    probability: null,
+    createdDate: "",
+    lastModifiedDate: "",
+    url: oppId
+      ? `https://clarityai.lightning.force.com/lightning/r/Opportunity/${oppId}/view`
+      : "",
+  };
+}
+
+// ──────────────────────────────────────────────
+// Route handler
+// ──────────────────────────────────────────────
+export async function GET() {
+  try {
+    let rows: Record<string, string>[] | null = null;
+    let source = "";
+
+    // 1. Service Account
+    rows = await fetchViaServiceAccount();
+    if (rows) source = "service-account";
+
+    // 2. CSV Fallback
+    if (!rows) {
+      rows = await fetchViaCSV();
+      if (rows) source = "csv";
     }
 
-    const data = await response.json();
+    if (!rows || rows.length === 0) {
+      return NextResponse.json({ error: "No data", configured: false }, { status: 200 });
+    }
 
-    const tickets: JiraTicket[] = (data.issues || []).map(
-      (issue: {
-        id: string;
-        key: string;
-        fields: {
-          summary: string;
-          status: { name: string };
-          priority: { name: string } | null;
-          assignee: { displayName: string } | null;
-          reporter: { displayName: string } | null;
-          customfield_10449: { displayName: string } | null; // Owner field
-          created: string;
-          updated: string;
-          customfield_10448: string | null;
-          duedate: string | null;
-          issuetype: { name: string };
-        };
-      }) => ({
-        id: issue.id,
-        key: issue.key,
-        summary: issue.fields.summary,
-        status: issue.fields.status?.name || "Unknown",
-        priority: issue.fields.priority?.name || "None",
-        assignee: issue.fields.assignee?.displayName || null,
-        reporter: issue.fields.reporter?.displayName || "Unknown",
-        owner: issue.fields.customfield_10449?.displayName || null,
-        created: issue.fields.created,
-        updated: issue.fields.updated,
-        dueDate: issue.fields.customfield_10448 || issue.fields.duedate || null,
-        type: issue.fields.issuetype?.name || "Task",
-        url: `${baseUrl}/browse/${issue.key}`,
-      })
-    );
+    // Filtering Logic
+    const hasAccessMethod = rows.some(r => findColumn(r, ["Access Method", "Access_Method_L__c"]));
+
+    const filterOpps = (stageKeyword: string) => {
+      return rows!.filter(row => {
+        const stage = findColumn(row, ["Stage", "StageName"]).toLowerCase();
+        const matchesStage = stage.includes(stageKeyword);
+
+        if (!hasAccessMethod) return matchesStage;
+
+        const method = findColumn(row, ["Access Method", "Access_Method_L__c"]).toLowerCase();
+        const isApiOrFeed = method.includes("api") || method.includes("data feed") || method.includes("datafeed");
+
+        return matchesStage && isApiOrFeed;
+      }).map((row, idx) => mapToOpportunity(row, idx));
+    };
+
+    const dueDiligence = filterOpps("due diligence");
+    const standingApart = filterOpps("standing apart");
 
     return NextResponse.json({
-      tickets,
-      total: data.total || tickets.length,
+      dueDiligence,
+      standingApart,
+      totalDueDiligence: dueDiligence.length,
+      totalStandingApart: standingApart.length,
       configured: true,
+      source,
     });
   } catch (error) {
-    console.error("Jira fetch error:", error);
     return NextResponse.json(
-      {
-        error: "Failed to fetch Jira tickets",
-        errorDetail: String(error),
-        tickets: [],
-        configured: true,
-      },
+      { error: String(error), configured: true, source: "error" },
       { status: 200 }
     );
   }

@@ -12,7 +12,7 @@ function to18CharId(id: string): string {
   if (!id) return "";
   id = id.trim();
   if (id.length === 18) return id;
-  if (id.length !== 15) return id; // Return original if not 15 or 18
+  if (id.length !== 15) return id;
 
   let suffix = "";
   for (let i = 0; i < 3; i++) {
@@ -29,9 +29,9 @@ function to18CharId(id: string): string {
 }
 
 // ──────────────────────────────────────────────
-// ROBUST CSV PARSER
+// CSV PARSER
 // ──────────────────────────────────────────────
-function parseCSV(text: string): Record<string, string>[] {
+function parseCSV(text: string): string[][] {
   const rows: string[][] = [];
   let currentRow: string[] = [];
   let currentVal = "";
@@ -68,22 +68,65 @@ function parseCSV(text: string): Record<string, string>[] {
     rows.push(currentRow);
   }
 
-  if (rows.length < 2) return [];
-
-  const headers = rows[0];
-  return rows.slice(1).map((values) => {
-    const rowObj: Record<string, string> = {};
-    headers.forEach((header, idx) => {
-      if (header) rowObj[header] = values[idx] || "";
-    });
-    return rowObj;
-  });
+  return rows;
 }
 
 // ──────────────────────────────────────────────
-// Fetchers
+// COLUMN MAPPING - Based on your Google Sheet structure
 // ──────────────────────────────────────────────
-async function fetchViaServiceAccount(): Promise<Record<string, string>[] | null> {
+const COLUMN_MAP = {
+  // Update these based on actual column positions (A=0, B=1, C=2, etc.)
+  OPPORTUNITY_NAME: 0,      // Column A - Adjust if needed
+  ACCOUNT_NAME: 1,          // Column B - Adjust if needed
+  STAGE: 2,                 // Column C - Adjust if needed
+  CLOSE_DATE: 3,            // Column D - Adjust if needed
+  AMOUNT: 4,                // Column E - Adjust if needed
+  OWNER: 5,                 // Column F - Adjust if needed
+  ACCESS_METHOD: 6,         // Column G - Adjust if needed
+  OPPORTUNITY_ID: 16,       // Column Q (A=0, so Q=16)
+};
+
+function parseAmount(value: string): number | null {
+  if (!value) return null;
+  let cleaned = value.replace(/[^0-9.,-]/g, "");
+  const europeanMatch = cleaned.match(/^([0-9.]*),(\d{1,2})$/);
+  if (europeanMatch) {
+    cleaned = europeanMatch[1].replace(/\./g, "") + "." + europeanMatch[2];
+  } else {
+    cleaned = cleaned.replace(/,/g, "");
+  }
+  const num = parseFloat(cleaned);
+  return isNaN(num) ? null : num;
+}
+
+function mapRowToOpportunity(row: string[], idx: number): SalesforceOpportunity {
+  const oppId = row[COLUMN_MAP.OPPORTUNITY_ID]?.trim() || "";
+  const validOppId = (oppId.startsWith("006") && (oppId.length === 15 || oppId.length === 18))
+    ? to18CharId(oppId)
+    : "";
+
+  return {
+    id: validOppId || `row-${idx}`,
+    name: row[COLUMN_MAP.OPPORTUNITY_NAME] || "",
+    accountName: row[COLUMN_MAP.ACCOUNT_NAME] || "",
+    stageName: row[COLUMN_MAP.STAGE] || "",
+    closeDate: row[COLUMN_MAP.CLOSE_DATE] || "",
+    amount: parseAmount(row[COLUMN_MAP.AMOUNT] || ""),
+    ownerName: row[COLUMN_MAP.OWNER] || "",
+    accessMethod: row[COLUMN_MAP.ACCESS_METHOD] || "",
+    probability: null,
+    createdDate: "",
+    lastModifiedDate: "",
+    url: validOppId
+      ? `https://clarityai.lightning.force.com/lightning/r/Opportunity/${validOppId}/view`
+      : "",
+  };
+}
+
+// ──────────────────────────────────────────────
+// FETCH DATA
+// ──────────────────────────────────────────────
+async function fetchViaServiceAccount(): Promise<string[][] | null> {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const rawKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
   if (!email || !rawKey || !rawKey.includes("BEGIN PRIVATE KEY")) return null;
@@ -101,14 +144,14 @@ async function fetchViaServiceAccount(): Promise<Record<string, string>[] | null
       spreadsheetId: SHEET_ID,
       range: `'${TAB_NAME}'`,
     });
-    return rowsToRecords(res.data.values as string[][]);
+    return res.data.values as string[][] || null;
   } catch (e) {
     console.error("Service Account Error:", e);
     return null;
   }
 }
 
-async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
+async function fetchViaCSV(): Promise<string[][] | null> {
   const urls = [
     `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GID}`,
     `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}`,
@@ -124,163 +167,62 @@ async function fetchViaCSV(): Promise<Record<string, string>[] | null> {
           if (rows.length > 0) return rows;
         }
       }
-    } catch (e) { console.error("CSV fetch failed", e); }
+    } catch (e) {
+      console.error("CSV fetch failed", e);
+    }
   }
   return null;
 }
 
-function rowsToRecords(raw: string[][]): Record<string, string>[] {
-  if (!raw || raw.length < 2) return [];
-  const headers = raw[0];
-  return raw.slice(1).map((values) => {
-    const row: Record<string, string> = {};
-    headers.forEach((header, idx) => {
-      row[header] = values[idx] || "";
-    });
-    return row;
-  });
-}
-
 // ──────────────────────────────────────────────
-// Column Finders
-// ──────────────────────────────────────────────
-function findColumn(
-  row: Record<string, string>,
-  candidates: string[],
-  strict = false
-): string {
-  const rowKeys = Object.keys(row);
-
-  // 1. Exact Match
-  for (const candidate of candidates) {
-    const exactKey = rowKeys.find(
-      (k) => k.toLowerCase().trim() === candidate.toLowerCase().trim()
-    );
-    if (exactKey) return row[exactKey];
-  }
-
-  // 2. Partial Match (Only if strict mode is OFF)
-  if (!strict) {
-    for (const candidate of candidates) {
-      const partialKey = rowKeys.find(
-        (k) => k.toLowerCase().trim().includes(candidate.toLowerCase().trim())
-      );
-      if (partialKey) return row[partialKey];
-    }
-  }
-  return "";
-}
-
-function getOpportunityID(row: Record<string, string>): string {
-  // Strategy 1: Look for exact known ID columns
-  const exactCandidates = [
-    "Opportunity ID",
-    "Opportunity Id",
-    "OPPORTUNITY_ID",
-    "Id",
-    "ID",
-    "Opp Id"
-  ];
-
-  let id = findColumn(row, exactCandidates, true); // Strict Mode
-
-  // Validate: Must look like an Opp ID (starts with 006)
-  if (id && id.trim().length >= 15 && id.trim().startsWith("006")) {
-    return to18CharId(id);
-  }
-
-  // Strategy 2: Brute Force Scan
-  // If the named column failed, look at EVERY value in the row.
-  // We return the first value that looks exactly like a Salesforce Opportunity ID.
-  const allValues = Object.values(row);
-  const foundId = allValues.find(val => {
-    const v = val.trim();
-    // Must start with 006 and be 15 or 18 chars
-    return v.startsWith("006") && (v.length === 15 || v.length === 18);
-  });
-
-  if (foundId) {
-    return to18CharId(foundId);
-  }
-
-  return "";
-}
-
-function parseAmount(value: string): number | null {
-  if (!value) return null;
-  let cleaned = value.replace(/[^0-9.,-]/g, "");
-  const europeanMatch = cleaned.match(/^([0-9.]*),(\d{1,2})$/);
-  if (europeanMatch) {
-    cleaned = europeanMatch[1].replace(/\./g, "") + "." + europeanMatch[2];
-  } else {
-    cleaned = cleaned.replace(/,/g, "");
-  }
-  const num = parseFloat(cleaned);
-  return isNaN(num) ? null : num;
-}
-
-function mapToOpportunity(
-  row: Record<string, string>,
-  idx: number
-): SalesforceOpportunity {
-
-  const oppId = getOpportunityID(row);
-
-  return {
-    id: oppId || `row-${idx}`,
-    name: findColumn(row, ["Opportunity Name", "Name", "Opportunity"]),
-    stageName: findColumn(row, ["Stage", "StageName", "Stage Name"]),
-    accessMethod: findColumn(row, ["Access Method (Opp)", "Access_Method_Opp__c", "Access Method"]),
-    amount: parseAmount(findColumn(row, ["Opp ARR (Master) (converted)", "Amount"])),
-    closeDate: findColumn(row, ["Close Date", "CloseDate", "Close"]),
-    accountName: findColumn(row, ["Account Name", "Account", "AccountName"]),
-    ownerName: findColumn(row, ["Opportunity Owner", "Owner", "Owner Name"]),
-    probability: null,
-    createdDate: "",
-    lastModifiedDate: "",
-    url: oppId
-      ? `https://clarityai.lightning.force.com/lightning/r/Opportunity/${oppId}/view`
-      : "",
-  };
-}
-
-// ──────────────────────────────────────────────
-// Route handler
+// ROUTE HANDLER
 // ──────────────────────────────────────────────
 export async function GET() {
   try {
-    let rows: Record<string, string>[] | null = null;
+    let rawRows: string[][] | null = null;
     let source = "";
 
-    // 1. Service Account
-    rows = await fetchViaServiceAccount();
-    if (rows) source = "service-account";
+    // 1. Try Service Account
+    rawRows = await fetchViaServiceAccount();
+    if (rawRows) source = "service-account";
 
-    // 2. CSV Fallback
-    if (!rows) {
-      rows = await fetchViaCSV();
-      if (rows) source = "csv";
+    // 2. Fallback to CSV
+    if (!rawRows) {
+      rawRows = await fetchViaCSV();
+      if (rawRows) source = "csv";
     }
 
-    if (!rows || rows.length === 0) {
-      return NextResponse.json({ error: "No data", configured: false }, { status: 200 });
+    if (!rawRows || rawRows.length < 2) {
+      return NextResponse.json({
+        error: "No data",
+        configured: false
+      }, { status: 200 });
     }
 
-    // Filtering Logic
-    const hasAccessMethod = rows.some(r => findColumn(r, ["Access Method", "Access_Method_L__c"]));
+    // Skip header row
+    const dataRows = rawRows.slice(1);
 
-    const filterOpps = (stageKeyword: string) => {
-      return rows!.filter(row => {
-        const stage = findColumn(row, ["Stage", "StageName"]).toLowerCase();
-        const matchesStage = stage.includes(stageKeyword);
+    // Filter and map opportunities
+    const filterOpps = (stageKeyword: string): SalesforceOpportunity[] => {
+      return dataRows
+        .filter(row => {
+          const stage = (row[COLUMN_MAP.STAGE] || "").toLowerCase();
+          const matchesStage = stage.includes(stageKeyword);
 
-        if (!hasAccessMethod) return matchesStage;
+          // Check if we should filter by Access Method
+          const accessMethod = (row[COLUMN_MAP.ACCESS_METHOD] || "").toLowerCase();
+          const hasAccessMethod = accessMethod.length > 0;
 
-        const method = findColumn(row, ["Access Method", "Access_Method_L__c"]).toLowerCase();
-        const isApiOrFeed = method.includes("api") || method.includes("data feed") || method.includes("datafeed");
+          if (!hasAccessMethod) return matchesStage;
 
-        return matchesStage && isApiOrFeed;
-      }).map(mapToOpportunity);
+          const isApiOrFeed =
+            accessMethod.includes("api") ||
+            accessMethod.includes("data feed") ||
+            accessMethod.includes("datafeed");
+
+          return matchesStage && isApiOrFeed;
+        })
+        .map((row, idx) => mapRowToOpportunity(row, idx));
     };
 
     const dueDiligence = filterOpps("due diligence");
@@ -295,8 +237,13 @@ export async function GET() {
       source,
     });
   } catch (error) {
+    console.error("Salesforce route error:", error);
     return NextResponse.json(
-      { error: String(error), configured: true, source: "error" },
+      {
+        error: String(error),
+        configured: true,
+        source: "error"
+      },
       { status: 200 }
     );
   }
